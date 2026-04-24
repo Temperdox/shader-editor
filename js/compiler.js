@@ -42,6 +42,7 @@ function compileGraph(){
   const nodeById = new Map(state.nodes.map(n => [n.id, n]));
   const outputRefs = new Map();  // nodeId → { socketName: glslVarName }
   const helpers = new Set();
+  const extensions = new Set();  // GLSL #extension directives needed (e.g. GL_OES_standard_derivatives)
   const textureBindings = [];    // [{ nodeId, uniformName }] — sampler2D needed by the compiled program
   const body = [];
   let tmpCounter = 0;
@@ -92,6 +93,9 @@ function compileGraph(){
     if (def.helpers){
       for (const h of def.helpers) helpers.add(h);
     }
+    if (def.extensions){
+      for (const x of def.extensions) extensions.add(x);
+    }
 
     // single-expression shorthand
     if (typeof result === 'string'){
@@ -103,6 +107,9 @@ function compileGraph(){
     // snoise in one of its modes)
     if (Array.isArray(result.helpers)){
       for (const h of result.helpers) helpers.add(h);
+    }
+    if (Array.isArray(result.extensions)){
+      for (const x of result.extensions) extensions.add(x);
     }
 
     // sampler2D uniforms this node needs. Compiler emits the declarations in
@@ -151,6 +158,10 @@ function compileGraph(){
     rgb2hsv:     0,
     palette:     0,
     rotateVec3:  0,
+    sdfHexagon:  0,
+    sdfTriangle: 0,
+    sdfCrystal:  1,   // depends on sdfHexagon + sdfTriangle
+    sdfNormal3D: 0,
   };
   const preludeHelpers = [...helpers]
     .sort((a, b) => (HELPER_RANK[a] ?? 9) - (HELPER_RANK[b] ?? 9))
@@ -161,7 +172,12 @@ function compileGraph(){
     .map(b => `uniform sampler2D ${b.uniformName};`)
     .join('\n');
 
-  const fs = `
+  // #extension directives MUST come before anything else (GLSL ES 1.00 spec).
+  const extDecls = [...extensions]
+    .map(x => `#extension ${x} : enable`)
+    .join('\n');
+
+  const fs = `${extDecls}
 precision mediump float;
 uniform float u_time;
 uniform vec2  u_mouse;

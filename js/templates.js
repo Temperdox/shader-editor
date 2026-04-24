@@ -1071,73 +1071,137 @@ function tplTopographySmooth(){
   c(final, 'out', out, 'color');
 }
 
-/* ---- Crystal — faceted gem with per-cell normals + iridescence ----
- * Voronoi partitions UV space into polygonal cells (the crystal facets).
- * Each cell gets its own flat normal, synthesized from 3 Randoms seeded on
- * the cell id (X,Y ∈ [-1,1]; Z ∈ [0.3, 1] so every facet faces the viewer).
- * Feeding that normal into Iridescence makes each facet reflect its own
- * color; the bias input ticks slowly with Time so the rainbow rotates
- * through every facet in unison. Fresnel on the same normal lights the
- * cell edges — the classic "cut-gem" visual: sharp polygons catching
- * light at different angles, all shimmering together.
+/* ---- Crystal — SDF-shaped gem with real fresnel, lambert, and emission ----
+ * Rebuilt on the SDF pipeline: a crystal silhouette (hex body + triangle tip)
+ * as a signed distance field, a fake-3D normal derived from the SDF's screen-
+ * space gradient, then standard physical-ish shading on top —
+ *   Lambert (N · L) drives the base iridescence brightness
+ *   Fresnel (1 − |N · V|) lights up the silhouette
+ *   Inner emission fades from the core outward
+ *   sdfMask composites the whole thing onto a deep-navy background
+ * Specular-channel bloom is wired to (fresnel + emission) × mask, so only
+ * the shiny bits glow — matte-bright pixels don't trigger bloom.
  */
 function tplCrystal(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const cuv   = n('centeredUV', -1020, -40);
-  const tSlow = n('time',       -1020, 140, { scale: 0.3 });   // drives iridescence bias
+  // --- inputs ---
+  const cuv   = n('centeredUV', -1120, -20);
+  const tSlow = n('time',       -1120, 160, { scale: 0.25 });  // animates iridescence bias
 
-  // Voronoi cells = crystal facets
-  const vor   = n('voronoi',     -700,  20, {}, { scale: 5 });
+  // --- shape ---
+  // sdfCrystal defaults: center (0, -0.1), size (0.18, 0.35) — a central
+  // crystal standing on the lower half of the canvas.
+  const sdf = n('sdfCrystal',   -820, -20);
 
-  // Per-cell normal components via three Randoms keyed on the cell id.
-  // Each uses a distinct seedVec3 so the 3 channels decorrelate.
-  const nx = n('random', -380, -120,
-    { mode:'decimal', precision:2 }, { min:-1,  max:1,  seedVec3:[0,0,0] });
-  const ny = n('random', -380,   60,
-    { mode:'decimal', precision:2 }, { min:-1,  max:1,  seedVec3:[1,0,0] });
-  const nz = n('random', -380,  240,
-    { mode:'decimal', precision:2 }, { min:0.3, max:1.0, seedVec3:[2,0,0] });
+  // fake 3D normal from the SDF gradient (+Z inside, tilting outward at edges)
+  const nor = n('sdfNormal',    -540, -140, {}, { bulge: 0.65 });
 
-  const normalV = n('combine', -60, 60);   // x,y,z → vec3 normal
+  // hard-edge 0/1 mask for compositing onto the background
+  const mask = n('sdfMask',     -540,  20,  {}, { edge: 0.003 });
 
-  // Iridescence — freq 5 = five rainbow cycles across the z-range.
-  // bias wired to slow time so all cells' colors rotate together.
-  const irid = n('iridescence', 300, -60, {}, { freq: 5 });
+  // soft falloff mask for the inner emission — brightest at the core,
+  // smoothly fading to 0 at the silhouette. Just a second sdfMask with
+  // a much wider edge so the "falloff band" spans most of the interior.
+  const emitMask = n('sdfMask', -540, 160, {}, { edge: 0.28 });
 
-  // Fresnel on the same normal → bright highlights on edge-on facets.
-  const frez = n('fresnel',     300, 160, {}, { power: 1.8 });
+  // --- lighting primitives ---
+  const view  = n('viewDir',    -540, 300);
+  const light = n('lightDir',   -540, 440, { x: 0.45, y: 0.7, z: 1.0 });
 
-  const white = n('color', 620, -100, { rgb: [1, 1, 1] });
-  const final = n('mix',   900,   60);
-  const out   = n('output', 1200, 60);
+  // --- shading layers ---
+  const irid  = n('iridescence', -220, -200, {}, { freq: 3.0 });
+  const lamb  = n('lambert',     -220,  -40, {}, { ambient: 0.35 });
+  const fres  = n('fresnel',     -220,  120, {}, { power: 2.2 });
 
-  c(cuv, 'p', vor, 'p');
+  // shaded body = iridescence × lambert (implemented as mix(black, irid, lamb))
+  const shaded = n('mix',         80, -160);
 
-  // cell id fans out to all three normal-component randoms
-  c(vor, 'id', nx, 'seed');
-  c(vor, 'id', ny, 'seed');
-  c(vor, 'id', nz, 'seed');
+  // rim = white × fresnel
+  const rimC   = n('color',       80,    40, { rgb: [1.0, 1.0, 1.0] });
+  const rimLit = n('mix',        380,    20);
 
-  // assemble the vec3 normal
-  c(nx, 'out', normalV, 'x');
-  c(ny, 'out', normalV, 'y');
-  c(nz, 'out', normalV, 'z');
+  // body + rim (additive blend)
+  const bodyRim = n('blend',     680, -60, { mode: 'add' });
 
-  // iridescence on the faceted normal, animated bias
-  c(normalV, 'xyz', irid, 'normal');
-  c(tSlow,   'out', irid, 'bias');
+  // emission color (cool teal, reads as crystalline glow)
+  const emitC   = n('color',     380, 180, { rgb: [0.35, 0.8, 1.0] });
+  const emitCol = n('mix',       680, 160);
 
-  // same normal drives fresnel for edge highlights
-  c(normalV, 'xyz', frez, 'normal');
+  // full crystal color (body+rim plus emission, additive)
+  const crystalCol = n('blend',  980, 40, { mode: 'add' });
 
-  // composite body + white rim
-  c(irid,  'out', final, 'a');
-  c(white, 'out', final, 'b');
-  c(frez,  'out', final, 't');
+  // deep background color
+  const bgC = n('color', 980, 280, { rgb: [0.02, 0.04, 0.07] });
 
-  c(final, 'out', out, 'color');
+  // mask-composite the crystal onto the background
+  const final = n('mix', 1280, 120);
+
+  // specular channel = (fresnel + emission) × mask → bloom only the shiny bits
+  const specR = n('multiply', 680, 380);
+  const specE = n('multiply', 680, 480);
+  const specSum = n('add',    980, 430);
+
+  const out = n('output', 1560, 180, {
+    bloom: 'on',
+    bloomThreshold: 0.2,
+    bloomRadius:    3.0,
+    bloomIntensity: 1.5,
+  });
+
+  // --- wiring ---
+  c(cuv, 'p', sdf, 'p');
+
+  // SDF → normal / masks (shared fan-out)
+  c(sdf, 'out', nor,      'sd');
+  c(sdf, 'out', mask,     'sd');
+  c(sdf, 'out', emitMask, 'sd');
+
+  // normal drives all three shading terms
+  c(nor, 'out', irid, 'normal');
+  c(nor, 'out', lamb, 'normal');
+  c(nor, 'out', fres, 'normal');
+
+  c(tSlow, 'out', irid, 'bias');
+  c(light, 'out', lamb, 'lightDir');
+  c(view,  'out', fres, 'view');
+
+  // shaded body = mix(black, iridescence, lambert)
+  c(irid, 'out', shaded, 'b');
+  c(lamb, 'out', shaded, 't');
+
+  // rim = mix(black, white, fresnel)
+  c(rimC, 'out', rimLit, 'b');
+  c(fres, 'out', rimLit, 't');
+
+  // body + rim
+  c(shaded, 'out', bodyRim, 'a');
+  c(rimLit, 'out', bodyRim, 'b');
+
+  // emission = mix(black, emitColor, emitMask)
+  c(emitC,    'out', emitCol, 'b');
+  c(emitMask, 'out', emitCol, 't');
+
+  // crystal = body+rim + emission
+  c(bodyRim, 'out', crystalCol, 'a');
+  c(emitCol, 'out', crystalCol, 'b');
+
+  // final = mix(bg, crystal, mask)
+  c(bgC,        'out', final, 'a');
+  c(crystalCol, 'out', final, 'b');
+  c(mask,       'out', final, 't');
+
+  // specular = fresnel*mask + emission*mask
+  c(fres,     'out', specR,   'a');
+  c(mask,     'out', specR,   'b');
+  c(emitMask, 'out', specE,   'a');
+  c(mask,     'out', specE,   'b');
+  c(specR,    'out', specSum, 'a');
+  c(specE,    'out', specSum, 'b');
+
+  c(final,   'out', out, 'color');
+  c(specSum, 'out', out, 'specular');
 }
 
 /* ---- Stained Glass — Voronoi cells through a slowly-rotating UV ---- */

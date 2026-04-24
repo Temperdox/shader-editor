@@ -172,6 +172,58 @@ vec3 rotateVec3(vec3 v, vec3 axis, float angle){
   float s = sin(angle);
   return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
 }`,
+  sdfHexagon: `
+/* Signed distance to a regular hexagon (flat-top orientation). Classic iq
+   formulation — the reflection trick maps any point into one 30° wedge and
+   then measures distance to the wedge's single edge. Negative inside. */
+float sdfHexagon(vec2 p, float r){
+  const vec3 k = vec3(-0.866025404, 0.5, 0.577350269);   // (-sqrt(3)/2, 0.5, 1/sqrt(3))
+  p = abs(p);
+  p -= 2.0 * min(dot(k.xy, p), 0.0) * k.xy;
+  p -= vec2(clamp(p.x, -k.z*r, k.z*r), r);
+  return length(p) * sign(p.y);
+}`,
+  sdfTriangle: `
+/* Signed distance to an equilateral triangle pointing up (apex at +y).
+   `r` is the circumradius — the triangle fits inside a circle of radius r. */
+float sdfTriangle(vec2 p, float r){
+  const float k = 1.7320508;   // sqrt(3)
+  p.x = abs(p.x) - r;
+  p.y = p.y + r/k;
+  if (p.x + k*p.y > 0.0) p = vec2(p.x - k*p.y, -k*p.x - p.y) / 2.0;
+  p.x -= clamp(p.x, -2.0*r, 0.0);
+  return -length(p) * sign(p.y);
+}`,
+  sdfCrystal: `
+/* Composite SDF for a crystal silhouette — a hex body with a pointed
+   pyramid top. Size is (halfWidth, bodyHeight). The tip is a triangle
+   placed above, unioned (min) with the body hex for a smooth outline. */
+float sdfCrystal(vec2 p, vec2 size){
+  // body: elongated hex (stretch Y by bodyHeight/width)
+  vec2 bp = p;
+  bp.y /= max(size.y / size.x, 0.001);
+  float body = sdfHexagon(bp, size.x) * min(size.y / size.x, 1.0);
+  // tip: triangle above the body
+  vec2 tp = p - vec2(0.0, size.y);
+  float tip = sdfTriangle(tp, size.x * 1.05);
+  // union
+  return min(body, tip);
+}`,
+  sdfNormal3D: `
+/* SDF → fake-3D surface normal. Uses screen-space derivatives to get the
+   SDF gradient, then builds a normal that bulges up in +Z at the surface
+   center and tilts outward at the edges. \`bulge\` controls how much the
+   surface domes upward (higher = more spherical, lower = flatter). The
+   result is designed to feed Fresnel / iridescence / lighting nodes. */
+vec3 sdfNormal3D(float sd, float bulge){
+  vec2 g = vec2(dFdx(sd), dFdy(sd));
+  // rescale the gradient so it's ~unit length regardless of sample spacing.
+  g = g / max(length(g), 1e-5);
+  // height above surface: 1 at the very center (sd << 0), fading to 0 at edge.
+  // Using -sd (distance INTO the shape) driven through smoothstep.
+  float h = smoothstep(0.0, 0.25, -sd) * max(bulge, 0.0);
+  return normalize(vec3(-g.x, -g.y, h + 0.0001));
+}`,
 };
 
 /* ---------------- node type registry ----------------
@@ -230,6 +282,32 @@ const NODE_TYPES = {
     category:'Input', title:'Resolution', desc:'canvas size in px',
     inputs:[], outputs:[{name:'out', type:'vec2'}],
     generate:() => ({ exprs:{ out:'u_resolution' } }),
+  },
+  viewDir: {
+    category:'Input', title:'View Dir', desc:'camera/view direction (vec3)',
+    inputs:[], outputs:[{name:'out', type:'vec3'}],
+    params:[{name:'dir', kind:'vec2', default:[0, 0], step:0.01}],   // tilt xy, z is auto
+    // For our fullscreen-quad setup the "camera" looks along +Z, so (0,0,1)
+    // is the natural default. Nudging x/y lets you fake a tilted camera
+    // angle for Fresnel / iridescence without a real 3D scene.
+    generate:(ctx) => {
+      const [x, y] = ctx.params.dir;
+      return { exprs:{ out: `normalize(vec3(${glslNum(x)}, ${glslNum(y)}, 1.0))` } };
+    },
+  },
+  lightDir: {
+    category:'Input', title:'Light Dir', desc:'directional light (vec3, normalized)',
+    inputs:[], outputs:[{name:'out', type:'vec3'}],
+    params:[
+      {name:'x', kind:'number', default:0.4,  step:0.01},
+      {name:'y', kind:'number', default:0.6,  step:0.01},
+      {name:'z', kind:'number', default:1.0,  step:0.01, min:0.0},
+    ],
+    // Directional light vector. z=1 means the light shines straight at the
+    // screen; x/y tilt it. Feed into Lambert for diffuse shading.
+    generate:(ctx) => ({ exprs:{
+      out: `normalize(vec3(${glslNum(ctx.params.x)}, ${glslNum(ctx.params.y)}, ${glslNum(ctx.params.z)}))`,
+    } }),
   },
   float: {
     category:'Input', title:'Float', desc:'scalar constant',
@@ -1038,6 +1116,128 @@ float ${d} = min(${e}.x, ${e}.y);`,
       };
     },
   },
+  sdfHexagon: {
+    category:'Pattern', title:'SDF Hexagon', desc:'signed distance to a flat-top hexagon',
+    inputs:[
+      {name:'p',      type:'vec2',  default:[0, 0]},
+      {name:'center', type:'vec2',  default:[0, 0]},
+      {name:'radius', type:'float', default:0.3},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    helpers:['sdfHexagon'],
+    generate:(ctx) => ({ exprs:{
+      out: `sdfHexagon(${ctx.inputs.p} - ${ctx.inputs.center}, ${ctx.inputs.radius})`,
+    } }),
+  },
+  sdfTriangle: {
+    category:'Pattern', title:'SDF Triangle', desc:'signed distance to an equilateral triangle',
+    inputs:[
+      {name:'p',      type:'vec2',  default:[0, 0]},
+      {name:'center', type:'vec2',  default:[0, 0]},
+      {name:'radius', type:'float', default:0.3},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    helpers:['sdfTriangle'],
+    // Pointing up by default. Use Rotate UV upstream on the `p` input to
+    // spin it — the triangle itself is a pure shape function.
+    generate:(ctx) => ({ exprs:{
+      out: `sdfTriangle(${ctx.inputs.p} - ${ctx.inputs.center}, ${ctx.inputs.radius})`,
+    } }),
+  },
+  sdfCrystal: {
+    category:'Pattern', title:'SDF Crystal', desc:'hex body + pointed tip — crystal silhouette',
+    inputs:[
+      {name:'p',      type:'vec2',  default:[0, 0]},
+      {name:'center', type:'vec2',  default:[0, -0.1]},
+      {name:'size',   type:'vec2',  default:[0.18, 0.35]},   // (halfWidth, bodyHeight)
+    ],
+    outputs:[{name:'out', type:'float'}],
+    helpers:['sdfHexagon', 'sdfTriangle', 'sdfCrystal'],
+    // Composite shape. `size.x` is the half-width of the hex body; `size.y`
+    // is how tall the body is. A triangle cap sits just above the body.
+    // Feed into SDF Normal for fake-3D shading, or SDF Mask to fill it.
+    generate:(ctx) => ({ exprs:{
+      out: `sdfCrystal(${ctx.inputs.p} - ${ctx.inputs.center}, ${ctx.inputs.size})`,
+    } }),
+  },
+  sdfUnion: {
+    category:'Pattern', title:'SDF Union', desc:'combine two SDFs — min(a, b), optionally smoothed',
+    inputs:[
+      {name:'a',      type:'float', default:1.0},
+      {name:'b',      type:'float', default:1.0},
+      {name:'smooth', type:'float', default:0.0},    // 0 = hard union
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // At smooth=0 this is plain min (sharp overlap). Higher values use the
+    // classic polynomial smin to round the joint into a blob — great when
+    // unioning overlapping crystal shards so they fuse smoothly.
+    generate:(ctx) => {
+      const k = ctx.tmp('uk');
+      const h = ctx.tmp('uh');
+      return {
+        setup:
+`float ${k} = max(${ctx.inputs.smooth}, 0.0);
+float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a}) / ${k}, 0.0, 1.0) : 0.0;`,
+        exprs:{
+          out: `(${k} > 0.0001 ? mix(${ctx.inputs.b}, ${ctx.inputs.a}, ${h}) - ${k} * ${h} * (1.0 - ${h}) : min(${ctx.inputs.a}, ${ctx.inputs.b}))`,
+        },
+      };
+    },
+  },
+  sdfIntersect: {
+    category:'Pattern', title:'SDF Intersect', desc:'overlap of two SDFs — max(a, b)',
+    inputs:[
+      {name:'a', type:'float', default:1.0},
+      {name:'b', type:'float', default:1.0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{
+      out: `max(${ctx.inputs.a}, ${ctx.inputs.b})`,
+    } }),
+  },
+  sdfSubtract: {
+    category:'Pattern', title:'SDF Subtract', desc:'cut b out of a — max(a, -b)',
+    inputs:[
+      {name:'a', type:'float', default:1.0},
+      {name:'b', type:'float', default:1.0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Use to carve holes: e.g. a big crystal minus smaller circles = cracks.
+    generate:(ctx) => ({ exprs:{
+      out: `max(${ctx.inputs.a}, -(${ctx.inputs.b}))`,
+    } }),
+  },
+  sdfMask: {
+    category:'Pattern', title:'SDF Mask', desc:'SDF → 0/1 filled mask with soft edge',
+    inputs:[
+      {name:'sd',   type:'float', default:1.0},
+      {name:'edge', type:'float', default:0.005},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Converts a signed distance into a filled mask: 1 inside, 0 outside,
+    // smoothly antialiased across the edge band. `edge` is the softness
+    // width in UV units (match to pixel size for crisp edges: ~1/resolution).
+    generate:(ctx) => ({ exprs:{
+      out: `(1.0 - smoothstep(-(${ctx.inputs.edge}), (${ctx.inputs.edge}), ${ctx.inputs.sd}))`,
+    } }),
+  },
+  sdfNormal: {
+    category:'Pattern', title:'SDF Normal', desc:'fake 3D normal from an SDF (bulging surface)',
+    inputs:[
+      {name:'sd',    type:'float', default:1.0},
+      {name:'bulge', type:'float', default:0.7},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    helpers:['sdfNormal3D'],
+    // Uses screen-space derivatives (dFdx/dFdy) on the SDF to build a normal
+    // that points +Z in the center and tilts outward near the edges — like
+    // a bulging lens. Feed into Fresnel / Iridescence / Lambert. Requires
+    // GL_OES_standard_derivatives (enabled automatically by the compiler).
+    extensions:['GL_OES_standard_derivatives'],
+    generate:(ctx) => ({ exprs:{
+      out: `sdfNormal3D(${ctx.inputs.sd}, ${ctx.inputs.bulge})`,
+    } }),
+  },
   voronoi: {
     category:'Pattern', title:'Voronoi', desc:'cellular noise — distance + cell-id',
     inputs:[
@@ -1287,6 +1487,25 @@ float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpn
         exprs:{
           out: `pow(max(${c}, vec3(0.0)), vec3(1.0 / max(${ctx.inputs.gamma}, 0.01)))`,
         },
+      };
+    },
+  },
+  lambert: {
+    category:'Effect', title:'Lambert', desc:'diffuse lighting: max(N·L, 0)',
+    inputs:[
+      {name:'normal',   type:'vec3', default:[0, 0, 1]},
+      {name:'lightDir', type:'vec3', default:[0.4, 0.6, 1.0]},
+      {name:'ambient',  type:'float', default:0.15},   // floor value so shadowed sides aren't pitch black
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Classic N·L diffuse term clamped to [0, 1], then mixed with an
+    // ambient floor so the back side of an object still reads. Multiply
+    // a surface color by this for basic directional shading.
+    generate:(ctx) => {
+      const d = ctx.tmp('lmd');
+      return {
+        setup: `float ${d} = max(dot(normalize(${ctx.inputs.normal}), normalize(${ctx.inputs.lightDir})), 0.0);`,
+        exprs:{ out: `mix(${ctx.inputs.ambient}, 1.0, ${d})` },
       };
     },
   },
