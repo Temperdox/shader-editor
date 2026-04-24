@@ -228,6 +228,22 @@ const NODE_TYPES = {
       out:`mix(${ctx.inputs.a}, ${ctx.inputs.b}, clamp(${ctx.inputs.t}, 0.0, 1.0))`,
     } }),
   },
+  lerp: {
+    category:'Math', title:'Lerp', desc:'float lerp: mix(a, b, t)',
+    inputs:[
+      {name:'a', type:'float', default:0},
+      {name:'b', type:'float', default:1},
+      {name:'t', type:'float', default:0.5},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // The Mix node above only handles vec3. Float-to-float interpolation is
+    // common enough (e.g. smoothly transitioning between two Random snapshots
+    // on adjacent floor-ticks of time) that a dedicated node saves graphs
+    // from assembling subtract/multiply/add chains by hand.
+    generate:(ctx) => ({ exprs:{
+      out:`mix(${ctx.inputs.a}, ${ctx.inputs.b}, clamp(${ctx.inputs.t}, 0.0, 1.0))`,
+    } }),
+  },
   pow: {
     category:'Math', title:'Power', desc:'pow(|x|, e)',
     inputs:[{name:'x', type:'float', default:1}, {name:'e', type:'float', default:2}],

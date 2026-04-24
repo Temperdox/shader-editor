@@ -597,38 +597,59 @@ function tplPlasmaWave(){
   const biasV = n('float',     320, 200, { value: 0.5 });
   const t01   = n('add',       800,  80);
 
-  // --- RANDOM PASTEL COLORS ---
-  // Slow-stepped time is the trick to avoiding flicker: Time(×0.3) → Floor
-  // only ticks forward every ~3.3 seconds, so the 6 Randoms seeded from it
-  // hold their values between ticks and snap to fresh pastels on each tick.
-  const tSlow = n('time',  -920, 560, { scale: 0.3 });
-  const tFlr  = n('floor', -640, 560);
+  // --- RANDOM PASTEL COLORS (smoothly interpolated) ---
+  // We need two things simultaneously: RANDOM color choices, and SMOOTH
+  // transitions between them. The trick is to run two Random nodes per
+  // channel — one seeded at the current integer tick (tA) and one at the
+  // next tick (tB = tA + 1) — and lerp between them by the fractional
+  // progress (0..1) within the current tick. Every ~3.3 s a new "next"
+  // value is generated, while the previous "next" smoothly becomes the
+  // new "current." No hard snaps.
 
-  // Each of the six Random nodes (2 colors × 3 channels) shares the same
-  // floor-time seed but gets a unique `seedVec3` default so the 6 values
-  // stay decorrelated. Range 0.6–1.0 = lightness floor that guarantees
-  // pastel (no dark / saturated colors).
-  const mkChan = (x, y, off) =>
+  const tSlow = n('time',     -960, 520, { scale: 0.3 });  // wall-clock × 0.3
+  const tA    = n('floor',    -700, 520);                   // integer tick, held for ~3.3 s
+  const tB    = n('add',      -460, 520, {}, { b: 1 });     // tB = tA + 1 (next tick)
+  const tFrac = n('subtract', -460, 680);                   // tFrac = tScale − tA  →  0..1
+  const tEase = n('smoothstep', -160, 680);                 // cubic ease (0..1 → 0..1, smoother-looking blend)
+
+  // factories — each pair (randA, randB) shares a `seedVec3` so it
+  // represents "the SAME random stream offset by 1 tick." That continuity
+  // is what makes tB's value at tick N become tA's value at tick N+1.
+  const mkR = (x, y, off, seedInput) =>
     n('random', x, y,
       { mode: 'decimal', precision: 2 },
       { min: 0.6, max: 1.0, seedVec3: off }
     );
 
-  const c1r = mkChan(-160, -520, [1, 0, 0]);
-  const c1g = mkChan(-160, -400, [2, 0, 0]);
-  const c1b = mkChan(-160, -280, [3, 0, 0]);
-  const c2r = mkChan(-160,  560, [4, 0, 0]);
-  const c2g = mkChan(-160,  700, [5, 0, 0]);
-  const c2b = mkChan(-160,  840, [6, 0, 0]);
+  const c1rA = mkR(-160, -720, [1, 0, 0]);
+  const c1rB = mkR( 140, -720, [1, 0, 0]);
+  const c1gA = mkR(-160, -560, [2, 0, 0]);
+  const c1gB = mkR( 140, -560, [2, 0, 0]);
+  const c1bA = mkR(-160, -400, [3, 0, 0]);
+  const c1bB = mkR( 140, -400, [3, 0, 0]);
 
-  // Base pickers stay as a fallback — if the user DISCONNECTS a Random from
-  // one channel, the picker's matching channel value takes over. Current
-  // defaults: warm peach, cool periwinkle.
-  const col1 = n('color',  320, -400, { rgb: [0.95, 0.70, 0.55] });
-  const col2 = n('color',  320,  700, { rgb: [0.60, 0.75, 0.95] });
+  const c2rA = mkR(-160,  840, [4, 0, 0]);
+  const c2rB = mkR( 140,  840, [4, 0, 0]);
+  const c2gA = mkR(-160, 1000, [5, 0, 0]);
+  const c2gB = mkR( 140, 1000, [5, 0, 0]);
+  const c2bA = mkR(-160, 1160, [6, 0, 0]);
+  const c2bB = mkR( 140, 1160, [6, 0, 0]);
 
-  const mix01 = n('mix',    900,  40);
-  const out   = n('output', 1260,  40);
+  // lerp between A (current tick) and B (next tick) using the eased fraction
+  const lR1 = n('lerp',  440, -720);
+  const lG1 = n('lerp',  440, -560);
+  const lB1 = n('lerp',  440, -400);
+  const lR2 = n('lerp',  440,  840);
+  const lG2 = n('lerp',  440, 1000);
+  const lB2 = n('lerp',  440, 1160);
+
+  // Base pickers stay as a fallback — if the user DISCONNECTS a Lerp from
+  // one channel, the picker's matching channel value takes over.
+  const col1 = n('color',  780, -560, { rgb: [0.95, 0.70, 0.55] });
+  const col2 = n('color',  780, 1000, { rgb: [0.60, 0.75, 0.95] });
+
+  const mix01 = n('mix',   1120,  40);
+  const out   = n('output', 1460,  40);
 
   // --- WIRING ---
   c(uv,    'out', split, 'v');
@@ -653,23 +674,44 @@ function tplPlasmaWave(){
   c(scl,   'out', t01,  'a');
   c(biasV, 'out', t01,  'b');
 
-  // slow-stepped seed fans out to every Random (output fan-out in action)
-  c(tSlow, 'out', tFlr, 'x');
-  c(tFlr,  'out', c1r,  'seed');
-  c(tFlr,  'out', c1g,  'seed');
-  c(tFlr,  'out', c1b,  'seed');
-  c(tFlr,  'out', c2r,  'seed');
-  c(tFlr,  'out', c2g,  'seed');
-  c(tFlr,  'out', c2b,  'seed');
+  // slow-stepped seed infrastructure
+  c(tSlow, 'out', tA,    'x');         // tA = floor(tScale)
+  c(tA,    'out', tB,    'a');         // tB = tA + 1 (inline b=1 default)
+  c(tSlow, 'out', tFrac, 'a');         // tFrac = tScale − tA (fract, 0..1 within tick)
+  c(tA,    'out', tFrac, 'b');
+  c(tFrac, 'out', tEase, 'x');         // cubic ease over the 0..1 fraction
 
-  // randoms drive the color channels (each wired Random overrides its
-  // matching channel from the color-picker param)
-  c(c1r, 'out', col1, 'r');
-  c(c1g, 'out', col1, 'g');
-  c(c1b, 'out', col1, 'b');
-  c(c2r, 'out', col2, 'r');
-  c(c2g, 'out', col2, 'g');
-  c(c2b, 'out', col2, 'b');
+  // every "current-tick" Random seeds from tA (fan-out)
+  c(tA, 'out', c1rA, 'seed');
+  c(tA, 'out', c1gA, 'seed');
+  c(tA, 'out', c1bA, 'seed');
+  c(tA, 'out', c2rA, 'seed');
+  c(tA, 'out', c2gA, 'seed');
+  c(tA, 'out', c2bA, 'seed');
+
+  // every "next-tick" Random seeds from tB (fan-out)
+  c(tB, 'out', c1rB, 'seed');
+  c(tB, 'out', c1gB, 'seed');
+  c(tB, 'out', c1bB, 'seed');
+  c(tB, 'out', c2rB, 'seed');
+  c(tB, 'out', c2gB, 'seed');
+  c(tB, 'out', c2bB, 'seed');
+
+  // lerp A→B per channel by the eased fraction
+  const pairs = [
+    [c1rA, c1rB, lR1, col1, 'r'],
+    [c1gA, c1gB, lG1, col1, 'g'],
+    [c1bA, c1bB, lB1, col1, 'b'],
+    [c2rA, c2rB, lR2, col2, 'r'],
+    [c2gA, c2gB, lG2, col2, 'g'],
+    [c2bA, c2bB, lB2, col2, 'b'],
+  ];
+  for (const [rA, rB, lerp, color, chan] of pairs){
+    c(rA,    'out', lerp,  'a');
+    c(rB,    'out', lerp,  'b');
+    c(tEase, 'out', lerp,  't');
+    c(lerp,  'out', color, chan);
+  }
 
   c(col1, 'out', mix01, 'a');
   c(col2, 'out', mix01, 'b');
