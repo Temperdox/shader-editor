@@ -13,6 +13,13 @@ const renderer = (() => {
     toast('WebGL unavailable', 'err');
     return { recompile: () => ({ ok: false }), canvas, gl: null };
   }
+  // WebGL1 gates dFdx/dFdy behind OES_standard_derivatives. The compiler emits
+  // `#extension GL_OES_standard_derivatives : enable` when SDF Normal (or any
+  // other derivative-using node) is in the graph, but the extension ALSO has
+  // to be activated JS-side before shader compile or the browser won't expose
+  // the symbol. Silently no-op if the GPU doesn't support it — the shader
+  // compile will then error with a clearer message.
+  gl.getExtension('OES_standard_derivatives');
 
   const VS = `
     attribute vec2 a_position;

@@ -125,6 +125,8 @@ const PREVIEW = (() => {
       toast('WebGL unavailable for preview', 'err');
       return false;
     }
+    // Enable dFdx/dFdy support (see renderer.js for details).
+    gl.getExtension('OES_standard_derivatives');
     posBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
