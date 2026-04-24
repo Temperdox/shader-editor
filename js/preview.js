@@ -263,8 +263,16 @@ const PREVIEW = (() => {
     const padY = r.height * 0.6;
     const nx = Math.max(-1, Math.min(1, (e.clientX - cx) / (r.width  / 2 + padX)));
     const ny = Math.max(-1, Math.min(1, (e.clientY - cy) / (r.height / 2 + padY)));
+    // Symmetric "lean AWAY from cursor" tilt on both axes. The X axis was
+    // already `-nx` in the dossier original, but the Y axis used `+ny`,
+    // which made the card lean TOWARD the cursor vertically — that put the
+    // receding (and therefore face-shade-darkened) side OPPOSITE the cursor,
+    // so the cursor-side appeared bright and the lighting read as co-
+    // directional on Y while correctly diametric on X. Matching the X sign
+    // makes cursor-TOP → TOP recedes → TOP shaded → BOTTOM bright, which is
+    // the diametric behavior the sheen/rim already follow.
     targetRy = -nx * MAX_TILT;
-    targetRx =  ny * MAX_TILT;
+    targetRx = -ny * MAX_TILT;
     mouseNX  = nx;
     mouseNY  = ny;
     hovering = true;
