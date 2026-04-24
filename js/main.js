@@ -17,6 +17,19 @@ $('#hideUiBtn').addEventListener('click', () => {
   if (label) label.textContent = hidden ? 'Show' : 'Hide';
 });
 
+// Lighting — toggles cursor-driven light + rotation uniforms. Shaders using
+// the `Sim Light` / `Sim Rotation` input nodes react live while the button
+// is active. The button itself just flips `body.sim-lighting-on`; the
+// renderer reads that class each frame to decide which uniform values to
+// send (see renderer.js / preview.js).
+$('#simLightBtn').addEventListener('click', () => {
+  const on = document.body.classList.toggle('sim-lighting-on');
+  const btn = $('#simLightBtn');
+  const label = btn.querySelector('.sim-light-label');
+  if (label) label.textContent = on ? 'Lit' : 'Lighting';
+  btn.classList.toggle('active', on);
+});
+
 // Save shader as PNG — downloads the current bgShader canvas. Requires
 // `preserveDrawingBuffer: true` on the WebGL context (set in renderer.js).
 $('#saveBtn').addEventListener('click', () => {

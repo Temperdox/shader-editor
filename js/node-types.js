@@ -319,6 +319,22 @@ const NODE_TYPES = {
       return { exprs:{ out: `normalize(vec3(${glslNum(x)}, ${glslNum(y)}, 1.0))` } };
     },
   },
+  simLight: {
+    category:'Input', title:'Sim Light', desc:'cursor-driven light direction (Lighting button)',
+    inputs:[], outputs:[{name:'out', type:'vec3'}],
+    // Exposes the `u_simLight` uniform fed by the renderer. When the
+    // bottom-right Lighting button is OFF, this is a constant (0, 0, 1)
+    // so the shader reads as "still". When ON, the direction tracks the
+    // cursor so Fresnel / iridescence / Lambert react live to hover.
+    generate:() => ({ exprs:{ out: 'u_simLight' } }),
+  },
+  simRotation: {
+    category:'Input', title:'Sim Rotation', desc:'cursor-driven rotation angle (Lighting button)',
+    inputs:[], outputs:[{name:'out', type:'float'}],
+    // Same on/off gate as Sim Light, but outputs a float angle (radians)
+    // suitable for feeding Rotate UV. 0 when Lighting is off.
+    generate:() => ({ exprs:{ out: 'u_simRot' } }),
+  },
   lightDir: {
     category:'Input', title:'Light Dir', desc:'directional light (vec3, normalized)',
     inputs:[], outputs:[{name:'out', type:'vec3'}],

@@ -557,6 +557,13 @@ body::after{
   position:static;  /* overrides the absolute positioning for individual fabs */
   right:auto; bottom:auto;
 }
+/* Highlight the Lighting fab while it's active so it's obvious the cursor-
+   driven light is on. Uses the accent color + a subtle inner glow. */
+.fab-group .save-fab.active{
+  border-color:rgba(255,205,120,.75);
+  color:#ffe7b3;
+  box-shadow:0 0 0 1px rgba(255,205,120,.35) inset, 0 0 18px rgba(255,205,120,.2);
+}
 
 /* ---- UI-hidden state (toggled by the Hide button) ----
    Keeps the shader background + the fab group itself visible; hides

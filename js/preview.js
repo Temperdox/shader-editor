@@ -47,7 +47,7 @@ const PREVIEW = (() => {
   let gl = null;
   let program = null;
   let posBuf, uvBuf;
-  let uTime, uMouse, uRes;
+  let uTime, uMouse, uRes, uSimLight, uSimRot;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
@@ -177,9 +177,11 @@ const PREVIEW = (() => {
     gl.enableVertexAttribArray(aUv);
     gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
 
-    uTime  = gl.getUniformLocation(program, 'u_time');
-    uMouse = gl.getUniformLocation(program, 'u_mouse');
-    uRes   = gl.getUniformLocation(program, 'u_resolution');
+    uTime     = gl.getUniformLocation(program, 'u_time');
+    uMouse    = gl.getUniformLocation(program, 'u_mouse');
+    uRes      = gl.getUniformLocation(program, 'u_resolution');
+    uSimLight = gl.getUniformLocation(program, 'u_simLight');
+    uSimRot   = gl.getUniformLocation(program, 'u_simRot');
 
     // Same texture binding strategy as renderer.js — one uniform1i per slot
     // at link time, then just rebind the underlying texture in `frame()`.
@@ -248,6 +250,21 @@ const PREVIEW = (() => {
         gl.uniform1f(uTime, (performance.now() - startTime) / 1000);
         gl.uniform2f(uMouse, shaderMX, shaderMY);
         gl.uniform2f(uRes, faceCanvas.width, faceCanvas.height);
+        // Sim-lighting: when the Lighting button is active, drive a virtual
+        // light direction + slight rotation from the card-relative cursor
+        // position so the shader reacts live to hover. See renderer.js.
+        const simOn = document.body.classList.contains('sim-lighting-on');
+        if (simOn){
+          const lx = (shaderMX - 0.5) * 2.0;
+          const ly = (shaderMY - 0.5) * 2.0;
+          const lz = 0.8;
+          const len = Math.hypot(lx, ly, lz) || 1;
+          if (uSimLight) gl.uniform3f(uSimLight, lx/len, ly/len, lz/len);
+          if (uSimRot)   gl.uniform1f(uSimRot, (shaderMX - 0.5) * 0.9);
+        } else {
+          if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 1.0);
+          if (uSimRot)   gl.uniform1f(uSimRot, 0.0);
+        }
         for (const b of textureBindings){
           gl.activeTexture(gl.TEXTURE0 + b.slot);
           gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));

@@ -1087,125 +1087,140 @@ function tplCrystal(){
   const { n, c } = _tplHelpers();
 
   // --- inputs ---
-  const cuv    = n('centeredUV', -1260,  -40);
-  const tIrid  = n('time',       -1260,  140, { scale: 0.15 });  // iridescence bias drift
-  const tSheen = n('time',       -1260,  300, { scale: 1.0  });  // sheen slide rate
+  const cuv    = n('centeredUV', -1400,   0);
+  const tIrid  = n('time',       -1400, 160, { scale: 0.25 });
+  const tSheen = n('time',       -1400, 300, { scale: 0.9  });
+  const simRot = n('simRotation',-1400, 440);   // 0 by default; cursor-X when Lighting is on
+
+  // Rotate the centered UV by the sim-rotation angle so the crystal
+  // appears to turn with the cursor when Lighting is on.
+  const rot = n('rotateUV', -1120, 80);
 
   // --- shape (centered, tall pentagon crystal) ---
-  const sdf  = n('sdfCrystal', -960, -40);   // default size (0.18, 0.45) centered
+  const sdf  = n('sdfCrystal', -860, 80);
 
-  // fake-3D normal (+Z in center, tilts outward near silhouette) and a hard
-  // mask for compositing.
-  const nor  = n('sdfNormal',  -680, -180, {}, { bulge: 0.85 });
-  const mask = n('sdfMask',    -680,  -40, {}, { edge: 0.003 });
+  // fake-3D normal + hard fill mask + a soft interior mask for the body glow
+  const nor     = n('sdfNormal',   -580, -120, {}, { bulge: 0.9 });
+  const mask    = n('sdfMask',     -580,   20, {}, { edge: 0.003 });
+  const glowMsk = n('sdfMask',     -580,  160, {}, { edge: 0.32 });   // soft interior falloff
 
   // --- lighting vectors ---
-  const view = n('viewDir',  -680, 100);
+  const simLit = n('simLight', -580, 300);   // cursor-driven light dir when Lighting is on
+  const view   = n('viewDir',  -580, 440);
 
   // --- shading terms ---
-  // Fresnel — silhouette-facing factor. Drives edge opacity + sheen brightness.
-  const fres = n('fresnel', -380, -180, {}, { power: 1.6 });
+  // Iridescence — rainbow colour shift tied to the surface normal.
+  const irid = n('iridescence', -260, -200, {}, { freq: 3.5 });
 
-  // Iridescence — rainbow color tied to the surface normal; slow time shifts it.
-  const irid = n('iridescence', -380, -40, {}, { freq: 3.0 });
+  // Lambert — diffuse shading using the sim light so edges reading "toward
+  // the cursor" get brighter. Ambient stays up so the body never goes black.
+  const lamb = n('lambert',     -260,  -40, {}, { ambient: 0.55 });
 
-  // Sheen lines — thin bright streaks sliding across the glass.
-  const sheen = n('sheenLines', -380, 110, {}, {
-    angle:     0.5,
-    count:     3.0,
-    speed:     0.3,
-    thickness: 0.1,
+  // Fresnel — silhouette factor; drives edge opacity and sheen brightness.
+  const fres = n('fresnel',     -260,  120, {}, { power: 1.4 });
+
+  // Sheen lines — thicker, closer-spaced, faster than before so they actually
+  // read as a moving highlight rather than a single barely-visible streak.
+  const sheen = n('sheenLines', -260, 280, {}, {
+    angle:     0.6,
+    count:     5.0,
+    speed:     0.8,
+    thickness: 0.22,
   });
 
-  // --- combine into a transparent/glassy color ---
-  // Each effect contributes additively over the background. Tone them low so
-  // the crystal reads as "clear glass with highlights" instead of a solid fill.
+  // --- colour layers ---
+  // Body glow: iridescence × glowMsk — fills the interior with a soft
+  // rainbow wash so the crystal has a visible body (not just clear glass).
+  const bodyGlow = n('mix', 60, -120);   // mix(black, irid, glowMsk) scaled below
+  const bodyAmt  = n('float',  60,  40, { value: 0.35 });
+  const bodyMul  = n('multiply', 380, 40);                  // glowMsk * 0.35
+  const bodyLit  = n('mix',      60, 160);                  // mix(black, irid, glowMsk*0.35)
 
-  // Sheen streaks colored by iridescence
-  const sheenLit = n('mix', -60, 60);   // mix(black, irid, sheen)
+  // Sheen lines tinted by iridescence.
+  const sheenLit = n('mix', 380, 260);   // mix(black, irid, sheen)
 
-  // Fresnel rim — cool near-white
-  const rimC    = n('color', -60, 220, { rgb: [0.75, 0.9, 1.05] });
-  const rimLit  = n('mix',   260, 200); // mix(black, rimC, fres)
+  // Fresnel rim — near-white, lit by lambert so edges respond to the light.
+  const rimC    = n('color',    380, 440, { rgb: [1.0, 1.05, 1.1] });
+  const rimCLit = n('mix',      700, 340);                  // mix(black, rimC, lamb)
+  const rimFres = n('mix',      980, 260);                  // mix(black, rimCLit, fres)
 
-  // Very subtle tint that deepens near edges
-  const tintC   = n('color', -60, 400, { rgb: [0.18, 0.45, 0.7] });
-  const tintAmt = n('float', -60, 560, { value: 0.35 });
-  const tintK   = n('multiply', 260, 480); // fres * 0.35
-  const tintLit = n('mix',      580, 400); // mix(black, tintC, fres*0.35)
-
-  // Accumulate: sheen + rim + tint (all additive, all small so interior stays clear)
-  const ab    = n('blend', 580, 120, { mode: 'add' });
-  const abc   = n('blend', 880, 220, { mode: 'add' });
+  // Accumulate body + sheen + rim (additive so they stack as light emission).
+  const bs   = n('blend', 700,  60, { mode: 'add' });       // body + sheen
+  const bsr  = n('blend', 1260, 200, { mode: 'add' });      // (body+sheen) + rim
 
   // --- background: deep navy, almost black ---
-  const bgC = n('color', 880, 480, { rgb: [0.015, 0.03, 0.055] });
+  const bgC = n('color', 980, 580, { rgb: [0.015, 0.03, 0.055] });
 
-  // Final compositing: bg + mask * crystal. Using blend-add with amount=mask
-  // gives: mix(bg, bg + crystal, mask). Outside mask → bg. Inside → bg +
-  // crystal, which makes the glass "show through" since crystal is dim.
-  const final = n('blend', 1200, 360, { mode: 'add' });
+  // Final = bg + mask * crystal. blend-add with amount=mask gives
+  // mix(bg, bg+crystal, mask): outside → bg; inside → bg + crystal.
+  const final = n('blend', 1580, 400, { mode: 'add' });
 
-  // Specular channel for bloom = (fresnel + sheen) * mask. Sheen streaks
-  // bloom brightest; rims get a softer glow; matte interior doesn't bloom.
-  const specFS  = n('add',       580, 700);
-  const specMul = n('multiply',  880, 700);
+  // Specular for bloom: fresnel + sheen, masked to the interior.
+  const specSum = n('add',      700, 700);
+  const specMul = n('multiply', 980, 700);
 
-  const out = n('output', 1520, 360, {
+  const out = n('output', 1880, 400, {
     bloom:          'on',
-    bloomThreshold: 0.15,
-    bloomRadius:    2.5,
-    bloomIntensity: 1.3,
+    bloomThreshold: 0.12,
+    bloomRadius:    3.0,
+    bloomIntensity: 1.4,
   });
 
   // --- wiring ---
-  c(cuv, 'p', sdf, 'p');
+  // rotate the UV by simRotation, then feed into the crystal SDF
+  c(cuv,    'p',   rot, 'uv');
+  c(simRot, 'out', rot, 'angle');
+  c(rot,    'out', sdf, 'p');
 
-  // SDF → normal / mask
-  c(sdf, 'out', nor,  'sd');
-  c(sdf, 'out', mask, 'sd');
+  // SDF → normal / masks
+  c(sdf, 'out', nor,     'sd');
+  c(sdf, 'out', mask,    'sd');
+  c(sdf, 'out', glowMsk, 'sd');
 
-  // Normal drives fresnel + iridescence; view only needs fresnel
-  c(nor,  'out', fres, 'normal');
-  c(view, 'out', fres, 'view');
-  c(nor,  'out', irid, 'normal');
-  c(tIrid,'out', irid, 'bias');
+  // normal drives iridescence / lambert / fresnel
+  c(nor,    'out', irid, 'normal');
+  c(nor,    'out', lamb, 'normal');
+  c(nor,    'out', fres, 'normal');
+  c(tIrid,  'out', irid, 'bias');
+  c(simLit, 'out', lamb, 'lightDir');
+  c(view,   'out', fres, 'view');
 
-  // Sheen lines use the UV (NOT the normal) so streaks are spatial; time
-  // slides them; angle is fixed so they read as a sweeping highlight.
-  c(cuv,    'p',   sheen, 'uv');
+  // sheen uses UV (spatial) + time for a sliding highlight
+  c(rot,    'out', sheen, 'uv');
   c(tSheen, 'out', sheen, 'time');
 
-  // sheenLit = mix(black, iridescence, sheenMask)  — thin rainbow streaks
+  // body glow = mix(black, iridescence, glowMsk * bodyAmt)
+  c(glowMsk, 'out', bodyMul, 'a');
+  c(bodyAmt, 'out', bodyMul, 'b');
+  c(irid,    'out', bodyLit, 'b');
+  c(bodyMul, 'out', bodyLit, 't');
+
+  // sheenLit = mix(black, iridescence, sheen)
   c(irid,  'out', sheenLit, 'b');
   c(sheen, 'out', sheenLit, 't');
 
-  // rimLit = mix(black, rimC, fresnel)
-  c(rimC, 'out', rimLit, 'b');
-  c(fres, 'out', rimLit, 't');
+  // rim: rimC shaded by lambert, then gated by fresnel
+  c(rimC,    'out', rimCLit, 'b');
+  c(lamb,    'out', rimCLit, 't');
+  c(rimCLit, 'out', rimFres, 'b');
+  c(fres,    'out', rimFres, 't');
 
-  // tintLit = mix(black, tintC, fresnel * tintAmt)
-  c(fres,    'out', tintK,   'a');
-  c(tintAmt, 'out', tintK,   'b');
-  c(tintC,   'out', tintLit, 'b');
-  c(tintK,   'out', tintLit, 't');
+  // accumulate: body + sheen + rim
+  c(bodyLit,  'out', bs,  'a');
+  c(sheenLit, 'out', bs,  'b');
+  c(bs,       'out', bsr, 'a');
+  c(rimFres,  'out', bsr, 'b');
 
-  // accumulate
-  c(sheenLit, 'out', ab,  'a');
-  c(rimLit,   'out', ab,  'b');
-  c(ab,       'out', abc, 'a');
-  c(tintLit,  'out', abc, 'b');
+  // composite onto background via mask
+  c(bgC,  'out', final, 'a');
+  c(bsr,  'out', final, 'b');
+  c(mask, 'out', final, 'amount');
 
-  // final = bg + mask * crystal
-  c(bgC,    'out', final, 'a');
-  c(abc,    'out', final, 'b');
-  c(mask,   'out', final, 'amount');
-
-  // spec = (fresnel + sheen) * mask
-  c(fres,   'out', specFS,  'a');
-  c(sheen,  'out', specFS,  'b');
-  c(specFS, 'out', specMul, 'a');
-  c(mask,   'out', specMul, 'b');
+  // spec = (fres + sheen) * mask  → bloom catches rim + streaks only
+  c(fres,    'out', specSum, 'a');
+  c(sheen,   'out', specSum, 'b');
+  c(specSum, 'out', specMul, 'a');
+  c(mask,    'out', specMul, 'b');
 
   c(final,   'out', out, 'color');
   c(specMul, 'out', out, 'specular');

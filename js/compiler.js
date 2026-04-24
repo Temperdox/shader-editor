@@ -182,6 +182,12 @@ precision mediump float;
 uniform float u_time;
 uniform vec2  u_mouse;
 uniform vec2  u_resolution;
+// Sim-lighting uniforms: u_simLight is a vec3 light direction that tracks
+// the cursor when the Lighting button is active (0,0,1 when off + no hover);
+// u_simRot is a slight object-rotation angle in radians driven by cursor X.
+// See renderer.js / preview.js for the per-frame update logic.
+uniform vec3  u_simLight;
+uniform float u_simRot;
 ${samplerDecls}
 varying vec2  v_uv;
 

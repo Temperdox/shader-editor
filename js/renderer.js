@@ -32,7 +32,7 @@ const renderer = (() => {
   `;
 
   let program = null;
-  let uTime, uMouse, uRes;
+  let uTime, uMouse, uRes, uSimLight, uSimRot;
   let mx = 0.5, my = 0.5;
 
   // Texture registry bound to this GL context. One per renderer so each
@@ -104,9 +104,11 @@ const renderer = (() => {
       gl.enableVertexAttribArray(aUv);
       gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
 
-      uTime  = gl.getUniformLocation(program, 'u_time');
-      uMouse = gl.getUniformLocation(program, 'u_mouse');
-      uRes   = gl.getUniformLocation(program, 'u_resolution');
+      uTime     = gl.getUniformLocation(program, 'u_time');
+      uMouse    = gl.getUniformLocation(program, 'u_mouse');
+      uRes      = gl.getUniformLocation(program, 'u_resolution');
+      uSimLight = gl.getUniformLocation(program, 'u_simLight');
+      uSimRot   = gl.getUniformLocation(program, 'u_simRot');
 
       // Resolve each sampler2D uniform location and lock it to a texture slot.
       // uniform1i only needs to be set once per program — the frame loop just
@@ -174,6 +176,22 @@ const renderer = (() => {
           gl.uniform1f(uTime, (performance.now() - start) / 1000);
           gl.uniform2f(uMouse, mx, my);
           gl.uniform2f(uRes, canvas.width, canvas.height);
+          // Sim-lighting uniforms — see index.html #simLightBtn. When the
+          // body class is set, the virtual light direction + slight object
+          // rotation follow the cursor; otherwise they're static defaults
+          // so the shader looks "still".
+          const simOn = document.body.classList.contains('sim-lighting-on');
+          if (simOn){
+            const lx = (mx - 0.5) * 2.0;
+            const ly = (my - 0.5) * 2.0;
+            const lz = 0.8;
+            const len = Math.hypot(lx, ly, lz) || 1;
+            if (uSimLight) gl.uniform3f(uSimLight, lx/len, ly/len, lz/len);
+            if (uSimRot)   gl.uniform1f(uSimRot, (mx - 0.5) * 0.9);
+          } else {
+            if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 1.0);
+            if (uSimRot)   gl.uniform1f(uSimRot, 0.0);
+          }
           for (const b of textureBindings){
             gl.activeTexture(gl.TEXTURE0 + b.slot);
             gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
