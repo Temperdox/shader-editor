@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shader Graph — Dossier</title>
+<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/Temperdox/VS/main/sitelogo.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,300;1,9..144,400&family=Albert+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/main.css" />
+<link rel="stylesheet" href="css/preview.css" />
+</head>
+<body>
+
+<!-- background shader: same marble/gold shader from the dossier site, compiled live from the node graph. -->
+<canvas id="bgShader"></canvas>
+
+<div class="chrome">
+  <div class="tl"><strong>Shader Graph</strong> &nbsp;·&nbsp; Node Editor</div>
+  <div class="br">Scroll to zoom &nbsp;·&nbsp; middle-drag to pan &nbsp;·&nbsp; right-click for actions</div>
+</div>
+
+<!-- ---- the 80% liquid-glass modal (liquidGL-style Apple glass morphism) ---- -->
+<div class="modal" id="modal">
+  <div class="modal-header">
+    <div class="modal-title">
+      Shader Graph <span class="badge">Live</span>
+    </div>
+    <div class="modal-tools">
+      <button class="tool-btn" id="previewShaderBtn">Preview</button>
+      <button class="tool-btn" id="loadShaderBtn">Load</button>
+      <button class="tool-btn" id="saveShaderBtn">Save</button>
+      <button class="tool-btn" id="resetGraphBtn">Reset</button>
+      <button class="tool-btn" id="addNodeBtn"><span class="plus">+</span> Add Module</button>
+    </div>
+  </div>
+  <div class="graph" id="graph">
+    <div class="graph-grid" id="graphGrid"></div>
+    <div class="viewport" id="viewport">
+      <svg class="connections" id="connections"
+           viewBox="-50000 -50000 100000 100000"
+           preserveAspectRatio="none"></svg>
+      <!-- nodes injected here by editor.js -->
+    </div>
+    <div class="zoom-pill" id="zoomPill">100%</div>
+    <div class="shader-error-pill" id="shaderError"></div>
+  </div>
+</div>
+
+<!-- ---- save shader as PNG ---- -->
+<button class="save-fab" id="saveBtn" type="button">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+  Save PNG
+</button>
+
+<!-- ---- context menu (custom right-click) ---- -->
+<div class="ctx" id="ctx"></div>
+
+<!-- ---- picker (add-module modal) ---- -->
+<div class="picker-backdrop" id="pickerBack"></div>
+<div class="picker" id="picker" role="dialog" aria-modal="true">
+  <div class="picker-head">
+    <h3>Add Module</h3>
+    <input class="picker-search" id="pickerSearch" placeholder="Search…" autocomplete="off" />
+  </div>
+  <div class="picker-body" id="pickerBody"></div>
+</div>
+
+<!-- ---- save shader modal ---- -->
+<div class="picker-backdrop" id="saveBack"></div>
+<div class="picker" id="saveModal" role="dialog" aria-modal="true">
+  <div class="picker-head">
+    <h3>Save Shader</h3>
+    <input class="picker-search" id="saveName" placeholder="Shader name" autocomplete="off" />
+  </div>
+  <div class="code-preview">
+    <div class="code-preview-header">
+      <span>WebGL Fragment Shader</span>
+      <button class="code-copy-btn" id="copyShaderBtn" type="button" aria-label="Copy shader code">
+        <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="5" y="5" width="8" height="9" rx="1.2"></rect>
+          <path d="M3 11V3a1 1 0 0 1 1-1h7"></path>
+        </svg>
+        <span class="copy-label">Copy</span>
+      </button>
+    </div>
+    <pre class="code-preview-body"><code id="shaderCode"></code></pre>
+  </div>
+  <div class="io-actions">
+    <button class="io-btn" id="saveToFileBtn">Save to File</button>
+    <button class="io-btn primary" id="saveToStorageBtn">Save to Storage</button>
+  </div>
+</div>
+
+<!-- ---- load shader modal ---- -->
+<div class="picker-backdrop" id="loadBack"></div>
+<div class="picker" id="loadModal" role="dialog" aria-modal="true">
+  <div class="picker-head">
+    <h3>Load Shader</h3>
+    <input class="picker-search" id="loadSearch" placeholder="Search saved shaders…" autocomplete="off" />
+  </div>
+  <div class="picker-body" id="loadList">
+    <!-- populated by persistence.js -->
+  </div>
+  <div class="io-actions">
+    <button class="io-btn" id="loadTemplateBtn">Load Template</button>
+    <button class="io-btn" id="loadFromFileBtn">Load from File</button>
+    <input type="file" id="loadFileInput" accept=".json,application/json" hidden />
+  </div>
+</div>
+
+<!-- ---- templates picker (opened by "Load Template") ---- -->
+<div class="picker-backdrop" id="templatesBack"></div>
+<div class="picker" id="templatesModal" role="dialog" aria-modal="true">
+  <div class="picker-head">
+    <h3>Shader Templates</h3>
+    <input class="picker-search" id="templatesSearch" placeholder="Search templates…" autocomplete="off" />
+  </div>
+  <div class="picker-body" id="templatesList">
+    <!-- populated by persistence.js from templates.js registry -->
+  </div>
+</div>
+
+<!-- ---- fade-to-black transition layer ---- -->
+<div class="fade-layer" id="fadeLayer"></div>
+
+<!-- ---- preview mode root (hidden by default; shown after fade) ---- -->
+<div class="preview-root" id="previewRoot">
+  <div class="preview-chrome">
+    <div class="pc-tl"><strong>Preview</strong> &nbsp;·&nbsp; Your Shader on a Card</div>
+    <div class="pc-tr">Hover to tilt &nbsp;·&nbsp; Live</div>
+  </div>
+
+  <div class="arena">
+    <div class="stage" id="previewStage">
+      <div class="glow"></div>
+      <div class="card-shadow"></div>
+
+      <div class="card" id="previewCard">
+        <div class="face">
+          <canvas class="shader-canvas" id="previewFaceShader"></canvas>
+          <div class="sss"></div>
+        </div>
+        <div class="sheen"></div>
+
+        <svg class="rim-svg" aria-hidden="true" focusable="false">
+          <defs>
+            <radialGradient id="previewRimLight" cx="50%" cy="50%" r="55%">
+              <stop offset="0"   stop-color="#fff"/>
+              <stop offset=".18" stop-color="#8c8c8c"/>
+              <stop offset=".42" stop-color="#1f1f1f"/>
+              <stop offset=".62" stop-color="#000"/>
+            </radialGradient>
+          </defs>
+          <rect width="100%" height="100%" rx="26" ry="26" fill="none"
+                stroke="url(#previewRimLight)" stroke-width="7"   opacity=".14"/>
+          <rect width="100%" height="100%" rx="26" ry="26" fill="none"
+                stroke="url(#previewRimLight)" stroke-width="3"   opacity=".287"/>
+          <rect width="100%" height="100%" rx="26" ry="26" fill="none"
+                stroke="url(#previewRimLight)" stroke-width="1.2" opacity=".638"/>
+        </svg>
+
+        <div class="content">
+          <div class="row">
+            <span><span class="dot"></span>Live</span>
+            <span>Preview · 2026</span>
+          </div>
+
+          <div class="avatar-wrap">
+            <div class="avatar-ring"></div>
+            <img class="avatar" src="https://raw.githubusercontent.com/Temperdox/VS/main/image.jpg"
+                 alt="avatar" draggable="false" crossorigin="anonymous" referrerpolicy="no-referrer" />
+          </div>
+
+          <h1 class="name">Shader Preview</h1>
+          <p class="tagline">Your graph &middot; Rendered live on the card face</p>
+
+          <div class="divider"></div>
+
+          <p class="bio">Move your cursor over the card to tilt it and see your shader react under the edge-lit glass. The fragment shader currently running here is compiled from the exact graph in the editor.</p>
+
+          <div class="meta-row">
+            <span>GLSL &middot; WebGL</span>
+            <span class="serial">No. 001</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button class="preview-back-btn" id="previewBackBtn" type="button">
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <line x1="19" y1="12" x2="5" y2="12"></line>
+      <polyline points="12 19 5 12 12 5"></polyline>
+    </svg>
+    Back to Editor
+  </button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Scripts are classic (not modules) so the page can be opened directly from
+     the filesystem without a dev server. Load order matters: helpers → node
+     types → state → compiler → renderer → editor → interactions → main. -->
+<script src="js/helpers.js"></script>
+<script src="js/node-types.js"></script>
+<script src="js/graph-state.js"></script>
+<script src="js/compiler.js"></script>
+<script src="js/textures.js"></script>
+<script src="js/renderer.js"></script>
+<script src="js/editor.js"></script>
+<script src="js/interactions.js"></script>
+<script src="js/templates.js"></script>
+<script src="js/persistence.js"></script>
+<script src="js/preview.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>

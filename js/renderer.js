@@ -1,0 +1,191 @@
+/* WebGL renderer — single full-screen quad, recompiled whenever the graph
+   changes. `preserveDrawingBuffer: true` is required so Save PNG can read the
+   current frame out of the canvas; without it the buffer is cleared before
+   toBlob returns (and you get a blank image). */
+const renderer = (() => {
+  const canvas = $('#bgShader');
+  const opts = { preserveDrawingBuffer: true, antialias: true };
+  const gl = canvas.getContext('webgl', opts) || canvas.getContext('experimental-webgl', opts);
+  if (!gl){
+    toast('WebGL unavailable', 'err');
+    return { recompile: () => ({ ok: false }), canvas, gl: null };
+  }
+
+  const VS = `
+    attribute vec2 a_position;
+    attribute vec2 a_uv;
+    varying vec2 v_uv;
+    void main(){
+      v_uv = a_uv;
+      gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+  `;
+
+  let program = null;
+  let uTime, uMouse, uRes;
+  let mx = 0.5, my = 0.5;
+
+  // Texture registry bound to this GL context. One per renderer so each
+  // WebGL context owns its own GPU-side texture objects.
+  const texRegistry = createTextureRegistry(gl);
+  // Populated from compileGraph() result; each entry maps a sampler2D
+  // uniform to a node id whose image we bind on the active texture slot.
+  let textureBindings = [];
+
+  // persistent fullscreen quad buffers (reused across program swaps)
+  const posBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1,-1,  1,-1, -1, 1,
+    -1, 1,  1,-1,  1, 1,
+  ]), gl.STATIC_DRAW);
+
+  const uvBuf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    0,0, 1,0, 0,1,
+    0,1, 1,0, 1,1,
+  ]), gl.STATIC_DRAW);
+
+  function compile(type, src){
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+      const log = gl.getShaderInfoLog(s);
+      gl.deleteShader(s);
+      throw new Error(log);
+    }
+    return s;
+  }
+  function link(vs, fs){
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+      throw new Error(gl.getProgramInfoLog(prog));
+    }
+    return prog;
+  }
+
+  function recompile(fsSource, bindings){
+    try {
+      const vs = compile(gl.VERTEX_SHADER, VS);
+      const fs = compile(gl.FRAGMENT_SHADER, fsSource);
+      const prog = link(vs, fs);
+      if (program) gl.deleteProgram(program);
+      program = prog;
+      gl.useProgram(program);
+
+      // rebind attribs for the new program (attrib locations can differ)
+      const aPos = gl.getAttribLocation(program, 'a_position');
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+      const aUv = gl.getAttribLocation(program, 'a_uv');
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+      gl.enableVertexAttribArray(aUv);
+      gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
+
+      uTime  = gl.getUniformLocation(program, 'u_time');
+      uMouse = gl.getUniformLocation(program, 'u_mouse');
+      uRes   = gl.getUniformLocation(program, 'u_resolution');
+
+      // Resolve each sampler2D uniform location and lock it to a texture slot.
+      // uniform1i only needs to be set once per program — the frame loop just
+      // rebinds the backing texture on the right slot.
+      textureBindings = (bindings || []).map((b, i) => ({
+        ...b,
+        slot: i,
+        location: gl.getUniformLocation(program, b.uniformName),
+      }));
+      for (const b of textureBindings){
+        if (b.location != null) gl.uniform1i(b.location, b.slot);
+      }
+
+      $('#shaderError').classList.remove('visible');
+      $('#shaderError').textContent = '';
+      return { ok: true };
+    } catch (e){
+      $('#shaderError').classList.add('visible');
+      $('#shaderError').textContent = 'Shader error:\n' + e.message;
+      return { ok: false, error: e.message };
+    }
+  }
+
+  function resize(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.max(2, Math.round(window.innerWidth  * dpr));
+    const h = Math.max(2, Math.round(window.innerHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h){
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  window.addEventListener('pointermove', (e) => {
+    mx = clamp(e.clientX / window.innerWidth, 0, 1);
+    // flip Y so the shader's +Y points up (CSS has +Y down)
+    my = clamp(1 - e.clientY / window.innerHeight, 0, 1);
+  }, { passive: true });
+
+  const start = performance.now();
+  function frame(){
+    // Skip the draw entirely while preview mode is showing (its own canvas
+    // is animating) or when the tab is hidden. rAF is still scheduled so we
+    // resume instantly when either condition flips — no restart handshake
+    // needed. Saves ~23 s of wasted GPU work over a typical preview session.
+    const hidden = document.hidden || document.body.classList.contains('preview-mode');
+    if (!hidden){
+      resize();
+      if (program){
+        gl.useProgram(program);
+        gl.uniform1f(uTime, (performance.now() - start) / 1000);
+        gl.uniform2f(uMouse, mx, my);
+        gl.uniform2f(uRes, canvas.width, canvas.height);
+        // Bind each sampler's current backing texture. Registry returns a
+        // 1×1 placeholder when the image hasn't loaded, so the draw never
+        // blocks on a missing texture.
+        for (const b of textureBindings){
+          gl.activeTexture(gl.TEXTURE0 + b.slot);
+          gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+        }
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  return { recompile, canvas, gl };
+})();
+
+// Debounced entry point — call whenever the graph changes.
+let _recompileTimer = null;
+function scheduleRecompile(){
+  clearTimeout(_recompileTimer);
+  _recompileTimer = setTimeout(() => {
+    const res = compileGraph();
+    if (!res.ok){
+      $('#shaderError').classList.add('visible');
+      $('#shaderError').textContent = 'Graph error: ' + res.error;
+      return;
+    }
+    renderer.recompile(res.fs, res.textureBindings);
+  }, 80);
+}
+
+function recompileShader(){
+  const res = compileGraph();
+  if (!res.ok){
+    $('#shaderError').classList.add('visible');
+    $('#shaderError').textContent = 'Graph error: ' + res.error;
+    return;
+  }
+  renderer.recompile(res.fs, res.textureBindings);
+}
