@@ -15,6 +15,27 @@
       startTX = state.view.tx; startTY = state.view.ty;
       graphEl.classList.add('panning');
       e.preventDefault();
+      return;
+    }
+    // left-click on empty graph space: clear selection (unless shift/ctrl)
+    // and begin a marquee drag. We only accept the click when the target is
+    // the graph surface itself or the grid overlay — clicks on nodes, SVG
+    // connection paths, or UI chrome must NOT start a marquee.
+    if (e.button === 0){
+      const onEmpty =
+        e.target === graphEl ||
+        e.target === viewportEl ||
+        e.target === connectionsEl ||
+        e.target.classList?.contains('graph-grid') ||
+        e.target === connectionsEl?.ownerSVGElement;
+      if (onEmpty){
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey){
+          state.selected.clear();
+          refreshSelectionClasses();
+        }
+        startMarquee(e);
+        e.preventDefault();
+      }
     }
   });
   window.addEventListener('pointermove', (e) => {
@@ -89,6 +110,53 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape'){
     closeContextMenu();
     closePicker();
+    return;
+  }
+
+  // Ignore shortcuts while the user is typing into an input/textarea/select —
+  // otherwise Ctrl+C etc. would interfere with normal text editing.
+  const t = e.target;
+  const typing =
+    t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  if (typing) return;
+
+  const mod = e.ctrlKey || e.metaKey;
+
+  if (mod && !e.shiftKey && (e.key === 'z' || e.key === 'Z')){
+    e.preventDefault();
+    doUndo();
+    return;
+  }
+  if (mod && ((e.key === 'y' || e.key === 'Y') || (e.shiftKey && (e.key === 'z' || e.key === 'Z')))){
+    e.preventDefault();
+    doRedo();
+    return;
+  }
+  if (mod && (e.key === 'c' || e.key === 'C')){
+    e.preventDefault();
+    copySelection();
+    return;
+  }
+  if (mod && (e.key === 'v' || e.key === 'V')){
+    e.preventDefault();
+    pasteClipboard();
+    return;
+  }
+  if (mod && (e.key === 'd' || e.key === 'D')){
+    e.preventDefault();
+    duplicateSelection();
+    return;
+  }
+  if (mod && (e.key === 's' || e.key === 'S')){
+    e.preventDefault();
+    if (typeof openSaveModal === 'function') openSaveModal();
+    return;
+  }
+  if (e.key === 'Delete' || e.key === 'Backspace'){
+    if (!state.selected.size) return;
+    e.preventDefault();
+    deleteSelection();
+    return;
   }
 });
 
@@ -113,26 +181,41 @@ function openEmptyContextMenu(x, y){
   const graphRect = graphEl.getBoundingClientRect();
   const worldX = (x - graphRect.left - tx) / scale;
   const worldY = (y - graphRect.top  - ty) / scale;
+  const canPaste = !!(clipboard.nodes && clipboard.nodes.length);
   openContextMenu(x, y, [
     { label:'Recenter to origin', fn:() => recenterView() },
     { label:'Add new module…',    fn:() => openPicker({ x: worldX, y: worldY }) },
     { sep:true },
+    ...(canPaste ? [{ label:'Paste modules', kbd:'Ctrl+V', fn:() => pasteClipboard() }] : []),
+    { sep:true },
+    { label:'Clear graph',        fn:() => clearGraph() },
     { label:'Reset graph',        danger:true, fn:() => resetGraph() },
   ]);
 }
 
 function openNodeContextMenu(x, y, node){
   const isOutput = node.type === 'output';
+  // If the clicked node wasn't in the current selection, right-click
+  // should act on JUST that node — replace selection with it.
+  if (!state.selected.has(node.id)){
+    state.selected.clear();
+    state.selected.add(node.id);
+    refreshSelectionClasses();
+  }
+  const multi = state.selected.size > 1;
   const items = [
+    { label: multi ? 'Copy modules'    : 'Copy module',    kbd:'Ctrl+C', fn:() => copySelection() },
+    { label: multi ? 'Paste modules'   : 'Paste module',   kbd:'Ctrl+V', fn:() => pasteClipboard() },
+    { label: multi ? 'Duplicate modules' : 'Duplicate module', kbd:'Ctrl+D', fn:() => duplicateSelection() },
+    { sep:true },
     { label:'Disconnect all inputs',    fn:() => disconnectNode(node, 'in')  },
     { label:'Disconnect all outputs',   fn:() => disconnectNode(node, 'out') },
     { sep:true },
-    { label:'Duplicate module',         fn:() => duplicateNode(node) },
     { label:'Reset values to default',  fn:() => resetNodeParams(node) },
   ];
   if (!isOutput){
     items.push({ sep:true });
-    items.push({ label:'Delete module', danger:true, fn:() => deleteNode(node) });
+    items.push({ label: multi ? 'Delete modules' : 'Delete module', danger:true, kbd:'Del', fn:() => deleteSelection() });
   }
   openContextMenu(x, y, items);
 }
@@ -230,8 +313,10 @@ function addNodeFromPicker(type){
   }
   const node = makeNode(type, x, y);
   state.nodes.push(node);
-  state.selected = node.id;
+  state.selected.clear();
+  state.selected.add(node.id);
   renderAll();
   scheduleRecompile();
+  pushHistory();
   closePicker();
 }

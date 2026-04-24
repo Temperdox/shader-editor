@@ -823,7 +823,7 @@ function tplStaticGrain(){
  *     band = abs(fract(h * freq) - 0.5)
  *     line = smoothstep(0.48, 0.5, band)    // 1 at contour boundary, 0 between
  * and get composited over the pastel background as a dark overlay. */
-function tplTopography(){
+function tplTopographyJagged(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
@@ -954,42 +954,185 @@ function tplTopography(){
   c(final, 'out', out, 'color');
 }
 
-/* ---- Crystal — iridescent + Fresnel rim light over a procedural normal ---- */
-/* Shows off the Iridescence and Fresnel nodes. The procedural Normal Map
- * provides surface variation; Iridescence turns the normal-to-viewer angle
- * into a rainbow shift (the oil-slick / thin-film look), and Fresnel adds
- * white rim highlights at grazing angles. Mix blends the rim on top of the
- * iridescent body — net effect: a soft crystal-like surface that catches
- * light differently at every point. */
+/* ---- Topography Smooth — same look as Topography Jagged but cos-based lines ----
+ * Jagged version uses `abs(fract(h·freq) − 0.5)`, which is a triangle wave
+ * with visible kinks at each tier transition. This version uses
+ * `cos(h · freq · 2π)` — a true sinusoid with smooth extrema — so every
+ * contour line transitions into and out of the ridge without any sharp
+ * corners. Pair the smooth wave with a wide smoothstep band (0.85…1.0)
+ * to draw soft anti-aliased curves. Rest of the pipeline (pastel drift,
+ * elevation tint, dark ink overlay) is identical to the Jagged template.
+ */
+function tplTopographySmooth(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv   = n('centeredUV', -1040, -40);
+  const tTerr = n('time',       -1040, 140, { scale: 0.3 });
+  const elev  = n('heightMap',   -720,  20, { scale: 2.0 });
+
+  // CONTOUR LINES (smooth). Scale = 10·2π ≈ 62.83 → 10 ridge cycles across
+  // the [0..1] elevation range. `cos` gives the sinusoid; smoothstep(0.85,
+  // 1.0, wave) picks out the peaks (the elevation boundaries) with a soft
+  // falloff that kills the kink-artifacts of the fract-based version.
+  const scaled = n('multiply',   -720, 220, {}, { b: 62.83185 });
+  const wave   = n('cos',        -460, 220);
+  const line   = n('smoothstep', -200, 220, {}, { a: 0.85, b: 1.0 });
+
+  // ---- PASTEL COLOR DRIFT (same as Topography Jagged) ----
+  const tClr  = n('time',      -1040, 420, { scale: 0.25 });
+  const tA    = n('floor',      -720, 420);
+  const tB    = n('add',        -460, 420, {}, { b: 1 });
+  const tFrac = n('fract',      -720, 560);
+  const tEase = n('smoothstep', -460, 560);
+
+  const mkR = (x, y, off) =>
+    n('random', x, y,
+      { mode: 'decimal', precision: 2 },
+      { min: 0.6, max: 1.0, seedVec3: off });
+
+  const lowRA = mkR(-220,  740, [1, 0, 0]);
+  const lowRB = mkR(  40,  740, [1, 0, 0]);
+  const lerpLR = n('lerp', 320,  740);
+  const lowGA = mkR(-220,  880, [2, 0, 0]);
+  const lowGB = mkR(  40,  880, [2, 0, 0]);
+  const lerpLG = n('lerp', 320,  880);
+  const lowBA = mkR(-220, 1020, [3, 0, 0]);
+  const lowBB = mkR(  40, 1020, [3, 0, 0]);
+  const lerpLB = n('lerp', 320, 1020);
+
+  const hiRA  = mkR(-220, 1220, [4, 0, 0]);
+  const hiRB  = mkR(  40, 1220, [4, 0, 0]);
+  const lerpHR = n('lerp', 320, 1220);
+  const hiGA  = mkR(-220, 1360, [5, 0, 0]);
+  const hiGB  = mkR(  40, 1360, [5, 0, 0]);
+  const lerpHG = n('lerp', 320, 1360);
+  const hiBA  = mkR(-220, 1500, [6, 0, 0]);
+  const hiBB  = mkR(  40, 1500, [6, 0, 0]);
+  const lerpHB = n('lerp', 320, 1500);
+
+  const colLow  = n('color', 620,  880, { rgb: [0.75, 0.90, 0.80] });
+  const colHigh = n('color', 620, 1360, { rgb: [0.98, 0.82, 0.85] });
+  const bg      = n('mix',   900, 1120);
+  const colLine = n('color', 900, 420, { rgb: [0.08, 0.06, 0.12] });
+  const final   = n('mix',   1200, 700);
+  const out     = n('output', 1500, 700);
+
+  c(cuv,   'p',   elev, 'p');
+  c(tTerr, 'out', elev, 'time');
+
+  // smooth contour pipeline
+  c(elev,   'height', scaled, 'a');
+  c(scaled, 'out',    wave,   'x');
+  c(wave,   'out',    line,   'x');
+
+  // color drift infrastructure
+  c(tClr,  'out', tA,    'x');
+  c(tA,    'out', tB,    'a');
+  c(tClr,  'out', tFrac, 'x');
+  c(tFrac, 'out', tEase, 'x');
+
+  c(tA, 'out', lowRA, 'seed');
+  c(tA, 'out', lowGA, 'seed');
+  c(tA, 'out', lowBA, 'seed');
+  c(tA, 'out',  hiRA, 'seed');
+  c(tA, 'out',  hiGA, 'seed');
+  c(tA, 'out',  hiBA, 'seed');
+  c(tB, 'out', lowRB, 'seed');
+  c(tB, 'out', lowGB, 'seed');
+  c(tB, 'out', lowBB, 'seed');
+  c(tB, 'out',  hiRB, 'seed');
+  c(tB, 'out',  hiGB, 'seed');
+  c(tB, 'out',  hiBB, 'seed');
+
+  const pairs = [
+    [lowRA, lowRB, lerpLR, colLow,  'r'],
+    [lowGA, lowGB, lerpLG, colLow,  'g'],
+    [lowBA, lowBB, lerpLB, colLow,  'b'],
+    [ hiRA,  hiRB, lerpHR, colHigh, 'r'],
+    [ hiGA,  hiGB, lerpHG, colHigh, 'g'],
+    [ hiBA,  hiBB, lerpHB, colHigh, 'b'],
+  ];
+  for (const [rA, rB, lp, col, ch] of pairs){
+    c(rA,    'out', lp,  'a');
+    c(rB,    'out', lp,  'b');
+    c(tEase, 'out', lp,  't');
+    c(lp,    'out', col, ch);
+  }
+
+  c(colLow,  'out',    bg, 'a');
+  c(colHigh, 'out',    bg, 'b');
+  c(elev,    'height', bg, 't');
+
+  c(bg,      'out', final, 'a');
+  c(colLine, 'out', final, 'b');
+  c(line,    'out', final, 't');
+
+  c(final, 'out', out, 'color');
+}
+
+/* ---- Crystal — faceted gem with per-cell normals + iridescence ----
+ * Voronoi partitions UV space into polygonal cells (the crystal facets).
+ * Each cell gets its own flat normal, synthesized from 3 Randoms seeded on
+ * the cell id (X,Y ∈ [-1,1]; Z ∈ [0.3, 1] so every facet faces the viewer).
+ * Feeding that normal into Iridescence makes each facet reflect its own
+ * color; the bias input ticks slowly with Time so the rainbow rotates
+ * through every facet in unison. Fresnel on the same normal lights the
+ * cell edges — the classic "cut-gem" visual: sharp polygons catching
+ * light at different angles, all shimmering together.
+ */
 function tplCrystal(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const cuv   = n('centeredUV', -780, -20);
-  const tSlow = n('time',       -780, 160, { scale: 0.25 });  // slow terrain-morph
+  const cuv   = n('centeredUV', -1020, -40);
+  const tSlow = n('time',       -1020, 140, { scale: 0.3 });   // drives iridescence bias
 
-  const nrm   = n('normalMap',  -460, 60, {
-    mode: 'dynamic', scale: 1.8, strength: 3.0, epsilon: 0.005,
-  });
+  // Voronoi cells = crystal facets
+  const vor   = n('voronoi',     -700,  20, {}, { scale: 5 });
 
-  // iridescent body color — 4 rainbow cycles across the normal-angle range
-  const irid  = n('iridescence', -100, -60, {}, { freq: 4.0, bias: 0.0 });
+  // Per-cell normal components via three Randoms keyed on the cell id.
+  // Each uses a distinct seedVec3 so the 3 channels decorrelate.
+  const nx = n('random', -380, -120,
+    { mode:'decimal', precision:2 }, { min:-1,  max:1,  seedVec3:[0,0,0] });
+  const ny = n('random', -380,   60,
+    { mode:'decimal', precision:2 }, { min:-1,  max:1,  seedVec3:[1,0,0] });
+  const nz = n('random', -380,  240,
+    { mode:'decimal', precision:2 }, { min:0.3, max:1.0, seedVec3:[2,0,0] });
 
-  // rim-light factor — bright at glancing angles, dark head-on
-  const frez  = n('fresnel',     -100, 160, {}, { power: 2.5 });
+  const normalV = n('combine', -60, 60);   // x,y,z → vec3 normal
 
-  const white = n('color', 260, -80, { rgb: [1.0, 1.0, 1.0] });
+  // Iridescence — freq 5 = five rainbow cycles across the z-range.
+  // bias wired to slow time so all cells' colors rotate together.
+  const irid = n('iridescence', 300, -60, {}, { freq: 5 });
 
-  // composite: lerp body → white by the Fresnel amount
-  const final = n('mix',    560, 40);
-  const out   = n('output', 900, 40);
+  // Fresnel on the same normal → bright highlights on edge-on facets.
+  const frez = n('fresnel',     300, 160, {}, { power: 1.8 });
 
-  c(cuv,   'p',   nrm,  'p');
-  c(tSlow, 'out', nrm,  'time');
+  const white = n('color', 620, -100, { rgb: [1, 1, 1] });
+  const final = n('mix',   900,   60);
+  const out   = n('output', 1200, 60);
 
-  c(nrm, 'normal', irid, 'normal');
-  c(nrm, 'normal', frez, 'normal');    // fan-out on the normal output
+  c(cuv, 'p', vor, 'p');
 
+  // cell id fans out to all three normal-component randoms
+  c(vor, 'id', nx, 'seed');
+  c(vor, 'id', ny, 'seed');
+  c(vor, 'id', nz, 'seed');
+
+  // assemble the vec3 normal
+  c(nx, 'out', normalV, 'x');
+  c(ny, 'out', normalV, 'y');
+  c(nz, 'out', normalV, 'z');
+
+  // iridescence on the faceted normal, animated bias
+  c(normalV, 'xyz', irid, 'normal');
+  c(tSlow,   'out', irid, 'bias');
+
+  // same normal drives fresnel for edge highlights
+  c(normalV, 'xyz', frez, 'normal');
+
+  // composite body + white rim
   c(irid,  'out', final, 'a');
   c(white, 'out', final, 'b');
   c(frez,  'out', final, 't');
@@ -1426,24 +1569,18 @@ const SHADER_TEMPLATES = [
     desc: 'Radial sin pulses + sharp smoothstep edges = cyberpunk neon.',   load: tplNeonRings },
   { id: 'staticGrain',     name: 'Static Grain',     category:'showcase',
     desc: 'Animated per-pixel random — showcases the Random node (with Time seed).', load: tplStaticGrain },
-  { id: 'topography',      name: 'Topography',       category:'showcase',
-    desc: 'Contour-line topo map over drifting pastel elevation tint.',      load: tplTopography },
+  { id: 'topographyJagged',name: 'Topography Jagged', category:'showcase',
+    desc: 'Contour lines via fract → triangle wave → smoothstep (hard kinks).', load: tplTopographyJagged },
+  { id: 'topographySmooth', name: 'Topography Smooth', category:'showcase',
+    desc: 'Contour lines via cos → sinusoid → smoothstep (smooth curves).',    load: tplTopographySmooth },
   { id: 'crystal',         name: 'Crystal',          category:'showcase',
-    desc: 'Iridescence + Fresnel rim light — oil-slick crystal shimmer.',    load: tplCrystal },
-  { id: 'stainedGlass',    name: 'Stained Glass',    category:'showcase',
-    desc: 'Voronoi cells + cosine palette through a slowly-rotating UV.',    load: tplStainedGlass },
-  { id: 'mandala',         name: 'Mandala',          category:'showcase',
-    desc: 'Kaleidoscope + Voronoi + Palette — slowly-rotating N-fold symmetry.', load: tplMandala },
+    desc: 'Voronoi facets + per-cell normals → iridescence + Fresnel.',       load: tplCrystal },
   { id: 'pixelFlow',       name: 'Pixel Flow',       category:'showcase',
     desc: '48×48 pixelated grid over animated Ridged FBM, palette-tinted and posterized.', load: tplPixelFlow },
-  { id: 'cosmicStar',      name: 'Cosmic Star',      category:'showcase',
-    desc: 'Soft Glow halo + 6-point Starburst + HDR tonemap — fake bloom stack.', load: tplCosmicStar },
   { id: 'plaid',           name: 'Plaid',            category:'showcase',
     desc: 'Crossed Stripes × two pastel colors — warm/cool tartan weave.',   load: tplPlaid },
   { id: 'vortex',          name: 'Vortex',           category:'showcase',
     desc: 'Swirl + noise-driven Warp UV feeding an FBM palette field.',      load: tplVortex },
   { id: 'sdfShapes',       name: 'SDF Shapes',       category:'showcase',
     desc: 'Circle + animated Box combined via Min, palette-colored.',        load: tplSDFShapes },
-  { id: 'bloomStar',       name: 'Bloom Star',       category:'showcase',
-    desc: 'Bright star on starry sky with REAL post-process bloom enabled.', load: tplBloomStar },
 ];

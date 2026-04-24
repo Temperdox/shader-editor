@@ -36,7 +36,7 @@ function renderNode(node){
   el.dataset.id = node.id;
   el.style.left = node.x + 'px';
   el.style.top  = node.y + 'px';
-  if (state.selected === node.id) el.classList.add('selected');
+  if (state.selected.has(node.id)) el.classList.add('selected');
 
   const header = document.createElement('div');
   header.className = 'node-header';
@@ -126,14 +126,34 @@ function renderNode(node){
   attachNodeDrag(el, node);
   attachSocketHandlers(el);
 
+  // Selection handling:
+  //   - Plain click:       replace selection with this node
+  //   - Shift/Ctrl + click: toggle this node in/out of the existing selection
+  //   - Click on a node that's already selected: keep selection as-is (so
+  //     the user can drag the whole multi-selection without losing it)
   el.addEventListener('mousedown', (e) => {
-    if (e.button === 0){
-      state.selected = node.id;
-      $$('.node', viewportEl).forEach(n => n.classList.toggle('selected', n.dataset.id === node.id));
+    if (e.button !== 0) return;
+    const multi = e.shiftKey || e.ctrlKey || e.metaKey;
+    if (multi){
+      if (state.selected.has(node.id)) state.selected.delete(node.id);
+      else                              state.selected.add(node.id);
+    } else if (!state.selected.has(node.id)){
+      state.selected.clear();
+      state.selected.add(node.id);
     }
+    refreshSelectionClasses();
   });
 
   return el;
+}
+
+/* Re-applies `.selected` to every visible node DOM based on the current
+   `state.selected` Set. Called after any selection change. Cheap — runs
+   through ~30 nodes setting classList. */
+function refreshSelectionClasses(){
+  for (const n of viewportEl.querySelectorAll('.node')){
+    n.classList.toggle('selected', state.selected.has(n.dataset.id));
+  }
 }
 
 /* Renders the coordinate-encoded thumbnail under the UV / Centered UV nodes.
@@ -242,6 +262,8 @@ function renderParamRow(node, param){
       node.params[param.name] = isFinite(v) ? v : 0;
       scheduleRecompile();
     });
+    // one history snapshot per commit (blur / enter), not per keystroke
+    input.addEventListener('change', () => pushHistory());
     // prevent header-drag from starting when the user interacts with the input
     input.addEventListener('pointerdown', e => e.stopPropagation());
     wrap.appendChild(wrapWithSpinner(input));
@@ -257,6 +279,7 @@ function renderParamRow(node, param){
       node.params[param.name] = [nr, ng, nb];
       scheduleRecompile();
     });
+    picker.addEventListener('change', () => pushHistory());
     picker.addEventListener('pointerdown', e => e.stopPropagation());
     wrap.appendChild(picker);
   }
@@ -276,6 +299,8 @@ function renderParamRow(node, param){
       node.params[param.name][1] = parseFloat(iy.value) || 0;
       scheduleRecompile();
     });
+    ix.addEventListener('change', () => pushHistory());
+    iy.addEventListener('change', () => pushHistory());
     ix.addEventListener('pointerdown', e => e.stopPropagation());
     iy.addEventListener('pointerdown', e => e.stopPropagation());
     const wx = wrapWithSpinner(ix);
@@ -297,6 +322,7 @@ function renderParamRow(node, param){
     sel.addEventListener('change', () => {
       node.params[param.name] = sel.value;
       scheduleRecompile();
+      pushHistory();
     });
     sel.addEventListener('pointerdown', e => e.stopPropagation());
     wrap.appendChild(sel);
@@ -319,6 +345,7 @@ function renderParamRow(node, param){
         node.params[param.name] = opt;
         renderAll();            // param visibility may have changed
         scheduleRecompile();
+        pushHistory();
       });
       group.appendChild(btn);
     }
@@ -515,6 +542,7 @@ function removeConnection(id){
   state.connections = state.connections.filter(c => c.id !== id);
   renderAll();
   scheduleRecompile();
+  pushHistory();
 }
 
 /* ---------------- node dragging (header grab) ---------------- */
@@ -524,21 +552,35 @@ function attachNodeDrag(el, node){
     if (e.button !== 0) return;
     e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
-    const ox = node.x, oy = node.y;
+
+    // If the grabbed node is part of a multi-selection, drag the whole
+    // group together. Otherwise drag just this one.
+    const group = state.selected.has(node.id) && state.selected.size > 1
+      ? state.nodes.filter(n => state.selected.has(n.id))
+      : [node];
+    const origins = new Map(group.map(n => [n.id, { x: n.x, y: n.y }]));
     el.classList.add('dragging');
+
     const onMove = (ev) => {
       const dx = (ev.clientX - startX) / state.view.scale;
       const dy = (ev.clientY - startY) / state.view.scale;
-      node.x = ox + dx;
-      node.y = oy + dy;
-      el.style.left = node.x + 'px';
-      el.style.top  = node.y + 'px';
+      for (const g of group){
+        const o = origins.get(g.id);
+        g.x = o.x + dx;
+        g.y = o.y + dy;
+        const gEl = viewportEl.querySelector(`.node[data-id="${g.id}"]`);
+        if (gEl){
+          gEl.style.left = g.x + 'px';
+          gEl.style.top  = g.y + 'px';
+        }
+      }
       renderConnections();
     };
     const onUp = () => {
       el.classList.remove('dragging');
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      pushHistory();   // one history entry per drag, not per pixel
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -660,6 +702,7 @@ function finalizeWire(a, b){
   });
   renderAll();
   scheduleRecompile();
+  pushHistory();
 }
 
 /* ---------------- node actions (called from the context menu) ---------------- */
@@ -671,6 +714,7 @@ function disconnectNode(node, dir){
   }
   renderAll();
   scheduleRecompile();
+  pushHistory();
 }
 
 function duplicateNode(node){
@@ -682,6 +726,7 @@ function duplicateNode(node){
   state.nodes.push(copy);
   renderAll();
   scheduleRecompile();
+  pushHistory();
 }
 
 function resetNodeParams(node){
@@ -692,6 +737,7 @@ function resetNodeParams(node){
   }
   renderAll();
   scheduleRecompile();
+  pushHistory();
 }
 
 function deleteNode(node){
@@ -701,6 +747,7 @@ function deleteNode(node){
   );
   renderAll();
   scheduleRecompile();
+  pushHistory();
 }
 
 function resetGraph(){
@@ -708,6 +755,7 @@ function resetGraph(){
   renderAll();
   recenterView();
   recompileShader();
+  pushHistory();
 }
 
 function recenterView(){
@@ -730,4 +778,189 @@ function recenterView(){
     state.view.ty = rect.height / 2 - cy;
   }
   updateViewportTransform();
+}
+
+/* ---------------- marquee / drag-select ----------------
+   Left-drag on empty graph space spans a selection rectangle. On mouseup,
+   every node whose logical-space AABB intersects the rectangle is added
+   to state.selected (or replaces it if shift wasn't held). */
+function startMarquee(e){
+  const graphRect = graphEl.getBoundingClientRect();
+  const x0 = e.clientX, y0 = e.clientY;
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+
+  const rectEl = document.createElement('div');
+  rectEl.className = 'marquee';
+  graphEl.appendChild(rectEl);
+
+  // snapshot so we can re-evaluate selection on every move
+  const preSelected = new Set(state.selected);
+
+  const toGraphXY = (cx, cy) => ({
+    x: cx - graphRect.left,
+    y: cy - graphRect.top,
+  });
+
+  const updateRectDom = (x1, y1, x2, y2) => {
+    rectEl.style.left   = Math.min(x1, x2) + 'px';
+    rectEl.style.top    = Math.min(y1, y2) + 'px';
+    rectEl.style.width  = Math.abs(x2 - x1) + 'px';
+    rectEl.style.height = Math.abs(y2 - y1) + 'px';
+  };
+
+  // convert graph-space screen coords into logical (viewport-transform) coords
+  const toLogical = (gx, gy) => ({
+    x: (gx - state.view.tx) / state.view.scale,
+    y: (gy - state.view.ty) / state.view.scale,
+  });
+
+  const onMove = (ev) => {
+    const a = toGraphXY(x0, y0);
+    const b = toGraphXY(ev.clientX, ev.clientY);
+    updateRectDom(a.x, a.y, b.x, b.y);
+
+    // compute logical-space rectangle and hit-test each node's AABB.
+    // nodes are ~210px wide, ~120px tall in logical units — we approximate
+    // with that fixed size since we don't track per-node dimensions.
+    const la = toLogical(Math.min(a.x, b.x), Math.min(a.y, b.y));
+    const lb = toLogical(Math.max(a.x, b.x), Math.max(a.y, b.y));
+    const nextSel = new Set(additive ? preSelected : []);
+    for (const nd of state.nodes){
+      const nx0 = nd.x, ny0 = nd.y, nx1 = nd.x + 210, ny1 = nd.y + 120;
+      if (nx1 >= la.x && nx0 <= lb.x && ny1 >= la.y && ny0 <= lb.y){
+        nextSel.add(nd.id);
+      }
+    }
+    state.selected = nextSel;
+    refreshSelectionClasses();
+  };
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    rectEl.remove();
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+}
+
+/* ---------------- copy / paste / duplicate ----------------
+   Semantics per the spec:
+   - COPY  (Ctrl+C): snapshot the selected nodes' types + positions only.
+                     The pasted copy resets params/defaults to type defaults
+                     and brings NO connections.
+   - PASTE (Ctrl+V): create fresh nodes of the snapshotted types at a
+                     small offset, NOT connected.
+   - DUPLICATE (Ctrl+D): clone the selected nodes AND any connections
+                         whose endpoints are both inside the selection —
+                         preserving their current param / default values.
+                         Cross-selection connections are dropped. */
+function copySelection(){
+  if (!state.selected.size){ toast('nothing selected'); return; }
+  const sel = state.nodes.filter(n => state.selected.has(n.id));
+  // Copy only type + relative position.
+  const originX = Math.min(...sel.map(n => n.x));
+  const originY = Math.min(...sel.map(n => n.y));
+  clipboard = {
+    nodes: sel.map(n => ({ type: n.type, dx: n.x - originX, dy: n.y - originY })),
+    connections: [],   // copy explicitly drops connections
+  };
+  toast(`copied ${sel.length} module${sel.length === 1 ? '' : 's'}`);
+}
+
+function pasteClipboard(){
+  if (!clipboard.nodes || !clipboard.nodes.length){ toast('clipboard empty'); return; }
+  // paste-anchor: top-left of the current viewport + 40px offset
+  const rect = graphEl.getBoundingClientRect();
+  const anchorX = (rect.width  / 2 - state.view.tx) / state.view.scale - 80;
+  const anchorY = (rect.height / 2 - state.view.ty) / state.view.scale - 80;
+
+  const newIds = [];
+  for (const entry of clipboard.nodes){
+    const fresh = makeNode(entry.type, anchorX + entry.dx, anchorY + entry.dy);
+    state.nodes.push(fresh);
+    newIds.push(fresh.id);
+  }
+  // select the newly-pasted batch
+  state.selected = new Set(newIds);
+  renderAll();
+  scheduleRecompile();
+  pushHistory();
+  toast(`pasted ${newIds.length} module${newIds.length === 1 ? '' : 's'}`);
+}
+
+function duplicateSelection(){
+  if (!state.selected.size){ toast('nothing selected'); return; }
+  const selNodes = state.nodes.filter(n => state.selected.has(n.id));
+  // id remap: old id → new id (for rewiring internal connections)
+  const idMap = new Map();
+  const newNodes = selNodes.map(n => {
+    const copy = makeNode(n.type, n.x + 40, n.y + 40);
+    // preserve params / defaults
+    copy.params   = JSON.parse(JSON.stringify(n.params   || {}));
+    copy.defaults = JSON.parse(JSON.stringify(n.defaults || {}));
+    idMap.set(n.id, copy.id);
+    return copy;
+  });
+  for (const nn of newNodes) state.nodes.push(nn);
+
+  // preserve only connections where BOTH endpoints are in the selection —
+  // matches "duplicate" semantics (the group copies intact, not its
+  // external interfaces).
+  for (const conn of state.connections){
+    if (idMap.has(conn.from.nodeId) && idMap.has(conn.to.nodeId)){
+      state.connections.push({
+        id: uid('c'),
+        from: { nodeId: idMap.get(conn.from.nodeId), socket: conn.from.socket },
+        to:   { nodeId: idMap.get(conn.to.nodeId),   socket: conn.to.socket   },
+      });
+    }
+  }
+
+  state.selected = new Set(newNodes.map(n => n.id));
+  renderAll();
+  scheduleRecompile();
+  pushHistory();
+  toast(`duplicated ${newNodes.length} module${newNodes.length === 1 ? '' : 's'}`);
+}
+
+function deleteSelection(){
+  if (!state.selected.size) return;
+  // Never delete the output node — the graph needs it to compile.
+  const deletable = [...state.selected].filter(id => {
+    const n = state.nodes.find(x => x.id === id);
+    return n && n.type !== 'output';
+  });
+  if (!deletable.length){ toast('cannot delete output', 'err'); return; }
+  const idSet = new Set(deletable);
+  state.nodes = state.nodes.filter(n => !idSet.has(n.id));
+  state.connections = state.connections.filter(c =>
+    !idSet.has(c.from.nodeId) && !idSet.has(c.to.nodeId)
+  );
+  state.selected.clear();
+  renderAll();
+  scheduleRecompile();
+  pushHistory();
+}
+
+/* ---------------- clear graph ---------------- */
+function clearGraph(){
+  state.nodes = [];
+  state.connections = [];
+  state.selected.clear();
+  // keep an Output node so the graph still compiles (renders black).
+  const out = makeNode('output', 0, 0);
+  state.nodes.push(out);
+  renderAll();
+  recenterView();
+  recompileShader();
+  pushHistory();
+  toast('graph cleared');
+}
+
+/* ---------------- undo/redo dispatcher ---------------- */
+function doUndo(){
+  if (undo()){ renderAll(); recompileShader(); toast('undo'); }
+}
+function doRedo(){
+  if (redo()){ renderAll(); recompileShader(); toast('redo'); }
 }

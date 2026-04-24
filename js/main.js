@@ -5,8 +5,17 @@
 // header buttons
 $('#addNodeBtn').addEventListener('click', () => openPicker());
 $('#resetGraphBtn').addEventListener('click', resetGraph);
+$('#clearGraphBtn').addEventListener('click', clearGraph);
 $('#saveShaderBtn').addEventListener('click', () => openSaveModal());
 $('#loadShaderBtn').addEventListener('click', () => openLoadModal());
+
+// Hide/Show — hides all UI chrome so only the background shader + these fabs
+// are visible. Toggles the button label between "Hide" and "Show".
+$('#hideUiBtn').addEventListener('click', () => {
+  const hidden = document.body.classList.toggle('ui-hidden');
+  const label = document.querySelector('#hideUiBtn .hide-label');
+  if (label) label.textContent = hidden ? 'Show' : 'Hide';
+});
 
 // Save shader as PNG — downloads the current bgShader canvas. Requires
 // `preserveDrawingBuffer: true` on the WebGL context (set in renderer.js).
@@ -52,3 +61,4 @@ seedDefaultGraph();
 renderAll();
 recenterView();
 recompileShader();
+pushHistory();   // seed the undo stack with the initial graph

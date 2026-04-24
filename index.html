@@ -32,6 +32,7 @@
       <button class="tool-btn" id="loadShaderBtn">Load</button>
       <button class="tool-btn" id="saveShaderBtn">Save</button>
       <button class="tool-btn" id="resetGraphBtn">Reset</button>
+      <button class="tool-btn" id="clearGraphBtn">Clear</button>
       <button class="tool-btn" id="addNodeBtn"><span class="plus">+</span> Add Module</button>
     </div>
   </div>
@@ -48,15 +49,24 @@
   </div>
 </div>
 
-<!-- ---- save shader as PNG ---- -->
-<button class="save-fab" id="saveBtn" type="button">
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-    <polyline points="7 10 12 15 17 10"></polyline>
-    <line x1="12" y1="15" x2="12" y2="3"></line>
-  </svg>
-  Save PNG
-</button>
+<!-- ---- bottom-right fab group: Hide + Save PNG ---- -->
+<div class="fab-group">
+  <button class="save-fab" id="hideUiBtn" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+      <circle cx="12" cy="12" r="3"></circle>
+    </svg>
+    <span class="hide-label">Hide</span>
+  </button>
+  <button class="save-fab" id="saveBtn" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <polyline points="7 10 12 15 17 10"></polyline>
+      <line x1="12" y1="15" x2="12" y2="3"></line>
+    </svg>
+    Save PNG
+  </button>
+</div>
 
 <!-- ---- context menu (custom right-click) ---- -->
 <div class="ctx" id="ctx"></div>

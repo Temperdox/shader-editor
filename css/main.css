@@ -544,6 +544,42 @@ body::after{
   border-color:rgba(185,165,255,.4);
 }
 
+/* ---- bottom-right fab group (Hide + Save PNG) ---- */
+.fab-group{
+  position:fixed;
+  right:24px; bottom:24px;
+  z-index:30;
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+.fab-group .save-fab{
+  position:static;  /* overrides the absolute positioning for individual fabs */
+  right:auto; bottom:auto;
+}
+
+/* ---- UI-hidden state (toggled by the Hide button) ----
+   Keeps the shader background + the fab group itself visible; hides
+   everything else (modal, chrome, toast, context menu, pickers). */
+body.ui-hidden .chrome,
+body.ui-hidden .modal,
+body.ui-hidden .ctx,
+body.ui-hidden .picker,
+body.ui-hidden .picker-backdrop,
+body.ui-hidden .toast{
+  display:none !important;
+}
+
+/* ---- marquee (drag-select rectangle) ---- */
+.marquee{
+  position:absolute;
+  border:1px dashed rgba(185,165,255,.6);
+  background:rgba(185,165,255,.08);
+  pointer-events:none;
+  z-index:10;
+  border-radius:2px;
+}
+
 /* ---- bottom-right save button ---- */
 .save-fab{
   position:fixed;
