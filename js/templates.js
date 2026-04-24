@@ -813,6 +813,579 @@ function tplStaticGrain(){
   c(comb, 'xyz', out, 'color');
 }
 
+/* ---- Topography — procedural heightfield as a pastel topo map ----
+ * Renders isolines of equal elevation (contour lines) over a slowly-morphing
+ * FBM terrain. Elevation drives a pastel low→high color gradient that uses
+ * the SAME smooth-drift pastel technique as Plasma Wave (two Random snapshots
+ * per channel on adjacent Floor ticks, lerped by the eased fraction), so the
+ * map re-tints itself through fresh pastel combinations every few seconds
+ * without visible snaps. Lines come from the classic:
+ *     band = abs(fract(h * freq) - 0.5)
+ *     line = smoothstep(0.48, 0.5, band)    // 1 at contour boundary, 0 between
+ * and get composited over the pastel background as a dark overlay. */
+function tplTopography(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  // ---- ELEVATION ----
+  const cuv   = n('centeredUV', -1040, -40);
+  const tTerr = n('time',       -1040, 140, { scale: 0.3 });   // slow terrain morph
+  const elev  = n('heightMap',   -720,  20, { scale: 2.0 });   // → float in ~0..1
+
+  // ---- CONTOUR LINES ----
+  // Each step uses an inline socket default so no Float node is needed.
+  const scaled = n('multiply',   -720, 220, {}, { b: 10 });    // elev × 10 → 10 tiers
+  const frac   = n('fract',      -460, 220);                    // 0..1 inside a tier
+  const shift  = n('subtract',   -220, 220, {}, { b: 0.5 });    // −0.5..+0.5
+  const absSh  = n('abs',           40, 220);                    // 0 mid-tier, 0.5 at border
+  // smoothstep(0.48, 0.5, absShift): 1 AT tier border (the contour line), 0 away.
+  const line   = n('smoothstep',   300, 220, {},
+                                   { a: 0.48, b: 0.5 });
+
+  // ---- SMOOTH PASTEL COLOR DRIFT (same infra as Plasma Wave) ----
+  const tClr  = n('time',        -1040, 420, { scale: 0.25 });  // color tick = 4 s
+  const tA    = n('floor',        -720, 420);                    // current integer tick
+  const tB    = n('add',          -460, 420, {}, { b: 1 });      // next tick (= tA + 1)
+  const tFrac = n('fract',        -720, 560);                    // 0..1 progress inside tick
+  const tEase = n('smoothstep',   -460, 560);                    // cubic ease
+
+  // A/B pair per channel, seedVec3 distinguishes the six streams. Same
+  // offset in A and B of a channel so B at tick N equals A at tick N+1 —
+  // that's how the lerp transitions have no discontinuity.
+  const mkR = (x, y, off) =>
+    n('random', x, y,
+      { mode: 'decimal', precision: 2 },
+      { min: 0.6, max: 1.0, seedVec3: off });
+
+  const lowRA = mkR(-220,  740, [1, 0, 0]);
+  const lowRB = mkR(  40,  740, [1, 0, 0]);
+  const lerpLR = n('lerp', 320,  740);
+  const lowGA = mkR(-220,  880, [2, 0, 0]);
+  const lowGB = mkR(  40,  880, [2, 0, 0]);
+  const lerpLG = n('lerp', 320,  880);
+  const lowBA = mkR(-220, 1020, [3, 0, 0]);
+  const lowBB = mkR(  40, 1020, [3, 0, 0]);
+  const lerpLB = n('lerp', 320, 1020);
+
+  const hiRA  = mkR(-220, 1220, [4, 0, 0]);
+  const hiRB  = mkR(  40, 1220, [4, 0, 0]);
+  const lerpHR = n('lerp', 320, 1220);
+  const hiGA  = mkR(-220, 1360, [5, 0, 0]);
+  const hiGB  = mkR(  40, 1360, [5, 0, 0]);
+  const lerpHG = n('lerp', 320, 1360);
+  const hiBA  = mkR(-220, 1500, [6, 0, 0]);
+  const hiBB  = mkR(  40, 1500, [6, 0, 0]);
+  const lerpHB = n('lerp', 320, 1500);
+
+  // Picker-value fallbacks (only visible if a Lerp wire is disconnected).
+  // Minty low, rosy high — arbitrary pastel starting palette.
+  const colLow  = n('color', 620,  880, { rgb: [0.65, 0.85, 0.75] });
+  const colHigh = n('color', 620, 1360, { rgb: [0.95, 0.75, 0.80] });
+
+  // Elevation → pastel gradient
+  const bg = n('mix', 900, 1120);
+
+  // Dark contour-line ink — stays constant (could be randomized too but
+  // topo maps traditionally use a single consistent ink color).
+  const colLine = n('color', 900, 740, { rgb: [0.08, 0.06, 0.12] });
+
+  // Final overlay: mix(bg, lineColor, lineMask)
+  const final = n('mix',    1200,  900);
+  const out   = n('output', 1500,  900);
+
+  // ---- WIRING ----
+  c(cuv,   'p',   elev, 'p');
+  c(tTerr, 'out', elev, 'time');
+
+  // contour pipeline
+  c(elev,   'height', scaled, 'a');
+  c(scaled, 'out',    frac,   'x');
+  c(frac,   'out',    shift,  'a');
+  c(shift,  'out',    absSh,  'x');
+  c(absSh,  'out',    line,   'x');
+
+  // pastel color drift infrastructure
+  c(tClr,  'out', tA,    'x');
+  c(tA,    'out', tB,    'a');
+  c(tClr,  'out', tFrac, 'x');    // tFrac = fract(tClr)
+  c(tFrac, 'out', tEase, 'x');
+
+  // fan-out: all A-randoms seed from tA
+  c(tA, 'out', lowRA, 'seed');
+  c(tA, 'out', lowGA, 'seed');
+  c(tA, 'out', lowBA, 'seed');
+  c(tA, 'out',  hiRA, 'seed');
+  c(tA, 'out',  hiGA, 'seed');
+  c(tA, 'out',  hiBA, 'seed');
+  // all B-randoms seed from tB
+  c(tB, 'out', lowRB, 'seed');
+  c(tB, 'out', lowGB, 'seed');
+  c(tB, 'out', lowBB, 'seed');
+  c(tB, 'out',  hiRB, 'seed');
+  c(tB, 'out',  hiGB, 'seed');
+  c(tB, 'out',  hiBB, 'seed');
+
+  // lerps for each channel, feeding the two color nodes' r/g/b
+  const pairs = [
+    [lowRA, lowRB, lerpLR, colLow,  'r'],
+    [lowGA, lowGB, lerpLG, colLow,  'g'],
+    [lowBA, lowBB, lerpLB, colLow,  'b'],
+    [ hiRA,  hiRB, lerpHR, colHigh, 'r'],
+    [ hiGA,  hiGB, lerpHG, colHigh, 'g'],
+    [ hiBA,  hiBB, lerpHB, colHigh, 'b'],
+  ];
+  for (const [rA, rB, lp, col, ch] of pairs){
+    c(rA,    'out', lp,  'a');
+    c(rB,    'out', lp,  'b');
+    c(tEase, 'out', lp,  't');
+    c(lp,    'out', col, ch);
+  }
+
+  // elevation-driven gradient
+  c(colLow,  'out',    bg, 'a');
+  c(colHigh, 'out',    bg, 'b');
+  c(elev,    'height', bg, 't');
+
+  // overlay dark contour lines on top
+  c(bg,      'out', final, 'a');
+  c(colLine, 'out', final, 'b');
+  c(line,    'out', final, 't');
+
+  c(final, 'out', out, 'color');
+}
+
+/* ---- Crystal — iridescent + Fresnel rim light over a procedural normal ---- */
+/* Shows off the Iridescence and Fresnel nodes. The procedural Normal Map
+ * provides surface variation; Iridescence turns the normal-to-viewer angle
+ * into a rainbow shift (the oil-slick / thin-film look), and Fresnel adds
+ * white rim highlights at grazing angles. Mix blends the rim on top of the
+ * iridescent body — net effect: a soft crystal-like surface that catches
+ * light differently at every point. */
+function tplCrystal(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv   = n('centeredUV', -780, -20);
+  const tSlow = n('time',       -780, 160, { scale: 0.25 });  // slow terrain-morph
+
+  const nrm   = n('normalMap',  -460, 60, {
+    mode: 'dynamic', scale: 1.8, strength: 3.0, epsilon: 0.005,
+  });
+
+  // iridescent body color — 4 rainbow cycles across the normal-angle range
+  const irid  = n('iridescence', -100, -60, {}, { freq: 4.0, bias: 0.0 });
+
+  // rim-light factor — bright at glancing angles, dark head-on
+  const frez  = n('fresnel',     -100, 160, {}, { power: 2.5 });
+
+  const white = n('color', 260, -80, { rgb: [1.0, 1.0, 1.0] });
+
+  // composite: lerp body → white by the Fresnel amount
+  const final = n('mix',    560, 40);
+  const out   = n('output', 900, 40);
+
+  c(cuv,   'p',   nrm,  'p');
+  c(tSlow, 'out', nrm,  'time');
+
+  c(nrm, 'normal', irid, 'normal');
+  c(nrm, 'normal', frez, 'normal');    // fan-out on the normal output
+
+  c(irid,  'out', final, 'a');
+  c(white, 'out', final, 'b');
+  c(frez,  'out', final, 't');
+
+  c(final, 'out', out, 'color');
+}
+
+/* ---- Stained Glass — Voronoi cells through a slowly-rotating UV ---- */
+/* Showcases Voronoi + Palette + Rotate UV. Each Voronoi cell gets a unique
+ * id (via the cell's integer coords hashed); feeding that id into the iq
+ * cosine Palette turns it into a randomly-assigned rainbow color. A dark
+ * ink overlay on cells' outer shells gives the stained-glass leading.
+ * Rotate UV animates the whole mosaic — the cells slowly drift + spin. */
+function tplStainedGlass(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const uv    = n('uv',         -780, 40);
+  const tSlow = n('time',       -780, 220, { scale: 0.05 });  // very slow rotation
+  const rot   = n('rotateUV',   -460,  60);
+
+  const vor   = n('voronoi',    -140,  60, {}, { scale: 6 });
+
+  // id → rainbow palette (defaults give iq's rainbow)
+  const pal   = n('palette',     200, -80);
+
+  // thin dark edges where dist is in the cells' outer shells
+  const edge  = n('smoothstep',  200, 200, {}, { a: 0.35, b: 0.5 });
+  const ink   = n('color',       200, 340, { rgb: [0.06, 0.04, 0.10] });
+
+  const final = n('mix',    560, 60);
+  const out   = n('output', 900, 60);
+
+  // UV → slow rotation → Voronoi
+  c(uv,    'out',   rot, 'uv');
+  c(tSlow, 'out',   rot, 'angle');
+  c(rot,   'out',   vor, 'p');
+
+  // id feeds the cosine palette (a/b/c/d left at rainbow defaults)
+  c(vor, 'id', pal, 't');
+
+  // dist feeds the edge smoothstep to build the lead-line mask
+  c(vor, 'dist', edge, 'x');
+
+  // composite: palette color, darkened at cell boundaries
+  c(pal,  'out', final, 'a');
+  c(ink,  'out', final, 'b');
+  c(edge, 'out', final, 't');
+
+  c(final, 'out', out, 'color');
+}
+
+/* ---- Mandala — kaleidoscope + Voronoi + Palette ---- */
+/* UV slowly rotates → N-fold kaleidoscope fold → Voronoi cells →
+ * palette-color per cell id, with dark leading at cell boundaries.
+ * The rotating input means cells drift through the symmetry, creating
+ * the live-mandala look. */
+function tplMandala(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const uv    = n('uv',          -860,  40);
+  const tRot  = n('time',        -860, 220, { scale: 0.05 });
+  const rot   = n('rotateUV',    -540,  60);
+  const kal   = n('kaleidoscope', -220,  60, {}, { sectors: 8 });
+
+  const vor   = n('voronoi',      100,  60, {}, { scale: 4 });
+
+  // id → rainbow palette (defaults give iq's rainbow)
+  const pal   = n('palette',      420, -80);
+
+  // dark ink on cell outer shells = stained-glass leading
+  const edge  = n('smoothstep',   420, 200, {}, { a: 0.35, b: 0.5 });
+  const ink   = n('color',        420, 340, { rgb: [0.05, 0.03, 0.10] });
+
+  const final = n('mix',    760,  60);
+  const out   = n('output', 1080, 60);
+
+  c(uv,   'out',   rot, 'uv');
+  c(tRot, 'out',   rot, 'angle');
+  c(rot,  'out',   kal, 'uv');
+  c(kal,  'out',   vor, 'p');
+
+  c(vor,  'id',    pal,  't');
+  c(vor,  'dist',  edge, 'x');
+
+  c(pal,  'out', final, 'a');
+  c(ink,  'out', final, 'b');
+  c(edge, 'out', final, 't');
+
+  c(final, 'out', out, 'color');
+}
+
+/* ---- Pixel Flow — Pixelate + Ridged FBM + Palette + Posterize ---- */
+/* Retro / 8-bit feel. UV gets snapped to a 48×48 grid, each cell gets a
+ * ridgedFbm value (animated slowly), fed through the cosine palette and
+ * then posterized to a few color steps. Every cell reads as a flat tile
+ * of one of a handful of colors that shift over time. */
+function tplPixelFlow(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const uv    = n('uv',         -820, 40);
+  const tFlow = n('time',       -820, 220, { scale: 0.15 });
+
+  const pix   = n('pixelate',   -520,  60, {}, { cells: 48 });
+  const ridge = n('ridgedFbm',  -200,  60);
+
+  const pal   = n('palette',     120,  60);
+  const post  = n('posterize',   440,  60, {}, { levels: 5 });
+
+  const out   = n('output',      760,  60);
+
+  c(uv,    'out', pix,   'uv');
+  c(pix,   'out', ridge, 'p');
+  c(tFlow, 'out', ridge, 'z');
+  c(ridge, 'out', pal,   't');
+  c(pal,   'out', post,  'color');
+  c(post,  'out', out,   'color');
+}
+
+/* ---- Cosmic Star — Soft Glow + Starburst + HDR Boost ---- */
+/* A bright orange core with hexagonal spikes radiating outward, all
+ * boosted into saturation via HDR tonemap. Showcases the bloom-cluster
+ * trio. Centered at (0, 0) in Centered-UV space, which is the middle of
+ * the canvas. */
+function tplCosmicStar(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv   = n('centeredUV', -820, 40);
+
+  // warm halo around the center
+  const glow  = n('softGlow',   -500, 40, {},
+    { radius: 0.35, color: [1.0, 0.55, 0.25] });
+
+  // 6-pointed spike pattern
+  const star  = n('starburst',  -500, 240, {},
+    { points: 6, sharpness: 40, radius: 0.6 });
+  const starC = n('grayscale',  -200, 240);
+
+  // additively composite the rays onto the halo
+  const add   = n('blend', 100, 120, { mode: 'add' });
+
+  // boost into visible saturation
+  const hdr   = n('hdrBoost', 420, 120, {},
+    { exposure: 0.6, gamma: 1.3 });
+
+  const out   = n('output', 740, 120);
+
+  c(cuv, 'p', glow, 'pos');
+  c(cuv, 'p', star, 'pos');
+
+  c(star,  'out', starC, 'x');
+
+  c(glow,  'out', add,   'a');
+  c(starC, 'out', add,   'b');
+
+  c(add,   'out', hdr,   'color');
+  c(hdr,   'out', out,   'color');
+}
+
+/* ---- Plaid — Stripes layered (horizontal × vertical) in pastel ---- */
+/* Two Stripes nodes at 0° and π/2 combined multiplicatively to form a
+ * plaid. The pastel color pair varies between the "warp" and "weft" via
+ * Mix — classic tartan vibe. Try tweaking the frequencies for finer weave. */
+function tplPlaid(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const uv   = n('uv', -760, 40);
+
+  // vertical stripes (angle = π/2)
+  const sv   = n('stripes', -480, -120, {}, { angle: 1.5708, frequency: 14 });
+  // horizontal stripes (angle = 0)
+  const sh   = n('stripes', -480,  200, {}, { angle: 0,      frequency: 10 });
+
+  // two pastel colors — one for weft, one for warp
+  const warm = n('color',   -480, -320, { rgb: [0.95, 0.76, 0.62] });  // salmon pastel
+  const cool = n('color',   -480,  400, { rgb: [0.58, 0.72, 0.92] });  // sky pastel
+
+  // each stripes mask picks between warm and cool
+  const mixV = n('mix',     -140, -200);
+  const mixH = n('mix',     -140,  280);
+
+  // multiplicatively combine: avg of the two so intersections stay bright
+  const avg  = n('blend',     220,  40, { mode: 'multiply' }, { amount: 1.0 });
+
+  const out  = n('output',    560,  40);
+
+  c(uv, 'out', sv, 'uv');
+  c(uv, 'out', sh, 'uv');
+
+  c(warm, 'out', mixV, 'a');
+  c(cool, 'out', mixV, 'b');
+  c(sv,   'out', mixV, 't');
+
+  c(cool, 'out', mixH, 'a');
+  c(warm, 'out', mixH, 'b');
+  c(sh,   'out', mixH, 't');
+
+  c(mixV, 'out', avg, 'a');
+  c(mixH, 'out', avg, 'b');
+
+  c(avg, 'out', out, 'color');
+}
+
+/* ---- Vortex — Swirl + domain warp + noise + palette ---- */
+/* UV gets swirled around the center, then domain-warped by a noise field
+ * so it feels organic rather than perfectly spiral. Final position feeds
+ * FBM → palette → output. The swirl strength + slow time give a liquid-
+ * mercury look. */
+function tplVortex(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv   = n('centeredUV', -960, 40);
+  const tSlow = n('time',       -960, 220, { scale: 0.15 });
+
+  // primary swirl
+  const swirl = n('swirl',      -620,  60, {}, { strength: 6.0, center: [0, 0] });
+
+  // secondary domain warp: noise-driven vec2 offset
+  const tWarp = n('time',       -960, 380, { scale: 0.25 });
+  const wx    = n('simplex',    -620, 300);
+  const wy    = n('simplex',    -620, 460);
+  const warpS = n('multiply',   -320, 300, {}, { b: 0.15 });
+  const warpT = n('multiply',   -320, 460, {}, { b: 0.15 });
+  const warpV = n('makeVec2',   -60,  380);
+  const warped= n('warpUV',      240,  140);
+
+  // final pattern
+  const fbmN  = n('fbm',         540,  140);
+  const pal   = n('palette',     860,  140);
+
+  const out   = n('output',     1180,  140);
+
+  // swirl
+  c(cuv, 'p', swirl, 'uv');
+
+  // warp contributions: sample noise twice (x, y offsets) with small mults
+  c(swirl, 'out', wx, 'p');
+  c(tWarp, 'out', wx, 'z');
+  c(swirl, 'out', wy, 'p');
+  c(tWarp, 'out', wy, 'z');
+  // the wy simplex uses a z-shifted lookup — wire tWarp(*2) for decorrelation
+  // (kept simple: same z here; OK for the visual)
+
+  c(wx, 'out', warpS, 'a');
+  c(wy, 'out', warpT, 'a');
+  c(warpS, 'out', warpV, 'x');
+  c(warpT, 'out', warpV, 'y');
+
+  c(swirl, 'out', warped, 'uv');
+  c(warpV, 'out', warped, 'warp');
+
+  // drive FBM with the warped + swirled UV, and use slow time as z to animate
+  c(warped, 'out', fbmN, 'p');
+  c(tSlow,  'out', fbmN, 'z');
+
+  c(fbmN, 'out', pal, 't');
+  c(pal,  'out', out, 'color');
+}
+
+/* ---- SDF Shapes — circle + box boolean combinations ---- */
+/* Demonstrates the SDF nodes with Min (union) and Max(a, -b) (subtraction).
+ * Two shapes orbit the center via a rotating vec2; Min gives their union,
+ * smoothstep around 0 turns the union into a filled sprite with clean
+ * anti-aliased edges. Palette colors the shape, Time animates the orbit. */
+function tplSDFShapes(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv   = n('centeredUV', -1020, 40);
+  const tOrb  = n('time',       -1020, 220, { scale: 0.5 });
+
+  // animated box center — orbit using pulse-ish sin/cos
+  const pOrbX = n('multiply',    -720, 200, {}, { b: 0.25 });
+  const pOrbY = n('multiply',    -720, 340, {}, { b: 0.25 });
+  const sOrb  = n('sin',         -960, 200);
+  const cOrb  = n('cos',         -960, 340);
+  const ctr   = n('makeVec2',    -460, 260);
+
+  // SDFs
+  const circ  = n('sdfCircle',   -460,  20, {}, { center: [0, 0], radius: 0.25 });
+  const box   = n('sdfBox',      -180, 260, {}, { size:   [0.18, 0.18] });
+
+  // Union via Min
+  const un    = n('min',          140, 120);
+
+  // fill — smoothstep(0, edgeWidth, -d). negative inside → becomes 1 inside.
+  // trick: negate the SDF so inside > 0 → smoothstep to a filled shape.
+  const neg   = n('subtract',    440, 120, {}, { a: 0.0 });   // 0 − d = −d
+  const fill  = n('smoothstep',  740, 120, {}, { a: 0.0, b: 0.02 });
+
+  // palette-color the filled shape, dark background
+  const bg    = n('color',       740,  -60, { rgb: [0.04, 0.03, 0.10] });
+  const pal   = n('palette',    1040,  120);
+  const tPal  = n('multiply',    440, -100, {}, { b: 0.1 });   // slow hue drift
+  const blend = n('mix',        1340,  100);
+
+  const out   = n('output',     1640,  100);
+
+  // orbit
+  c(tOrb, 'out', sOrb, 'x');
+  c(tOrb, 'out', cOrb, 'x');
+  c(sOrb, 'out', pOrbX, 'a');
+  c(cOrb, 'out', pOrbY, 'a');
+  c(pOrbX, 'out', ctr, 'x');
+  c(pOrbY, 'out', ctr, 'y');
+
+  // SDFs
+  c(cuv, 'p', circ, 'p');
+  c(cuv, 'p', box,  'p');
+  c(ctr, 'out', box, 'center');
+
+  // Union
+  c(circ, 'out', un, 'a');
+  c(box,  'out', un, 'b');
+
+  // negate and smoothstep for filled mask
+  c(un,  'out', neg,  'b');
+  c(neg, 'out', fill, 'x');
+
+  // palette hue drifts over time
+  c(tOrb, 'out', tPal, 'a');
+  c(tPal, 'out', pal,  't');
+
+  // mix(bg, shapeColor, fill)
+  c(bg,   'out', blend, 'a');
+  c(pal,  'out', blend, 'b');
+  c(fill, 'out', blend, 't');
+
+  c(blend, 'out', out, 'color');
+}
+
+/* ---- Bloom Star — real post-process bloom on a star-field scene ----
+ * Scene: a bright cosmic star (Soft Glow + Starburst on a dark sky).
+ * Output node has `bloom: on` with tuned threshold/radius/intensity — the
+ * renderer then runs the 3-pass FBO bloom chain (threshold→H-blur→V-blur+
+ * composite), so the bright parts of the scene bleed into the surrounding
+ * dark sky automatically. This is the showcase for genuine post-process
+ * bloom (not the HDR-Boost fake). */
+function tplBloomStar(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv  = n('centeredUV', -820,  40);
+
+  // warm halo at origin
+  const glow = n('softGlow',   -520,  40, {},
+    { radius: 0.18, color: [1.0, 0.75, 0.45] });
+
+  // 6-point starburst through the same origin
+  const star = n('starburst',  -520, 240, {},
+    { points: 6, sharpness: 50, radius: 0.55 });
+  const starC = n('grayscale', -200, 240);
+
+  // starry background noise — tiny sparse dots
+  const tw   = n('time',       -820, 460, { scale: 0.3 });
+  const snz  = n('simplex',    -520, 460);
+  const sharp= n('smoothstep', -200, 460, {}, { a: 0.75, b: 0.82 });
+  const starsC = n('grayscale',  100, 460);
+
+  // combine: halo + spike + dusty stars
+  const add1 = n('blend',       420,  80, { mode: 'add' });
+  const add2 = n('blend',       720, 200, { mode: 'add' });
+
+  // bloom is enabled on the output node — this is the whole point of the template
+  const out  = n('output',     1040, 200, {
+    bloom: 'on',
+    bloomThreshold: 0.55,
+    bloomRadius:    3.5,
+    bloomIntensity: 1.2,
+  });
+
+  // wire halo + spike into add1
+  c(cuv,  'p',   glow, 'pos');
+  c(cuv,  'p',   star, 'pos');
+  c(star, 'out', starC, 'x');
+  c(glow,  'out', add1, 'a');
+  c(starC, 'out', add1, 'b');
+
+  // dusty star background
+  c(cuv, 'p',   snz, 'p');
+  c(tw,  'out', snz, 'z');
+  c(snz, 'out', sharp, 'x');
+  c(sharp, 'out', starsC, 'x');
+
+  // add halo+spike + dust
+  c(add1,   'out', add2, 'a');
+  c(starsC, 'out', add2, 'b');
+
+  c(add2, 'out', out, 'color');
+}
+
 /* ---------------- Registry (order = display order in the picker) ---------------- */
 /* Template registry. `category` groups items into collapsible sections in the
    picker UI: 'demo' is the tutorial/feature-walkthrough set, 'showcase' is the
@@ -853,4 +1426,24 @@ const SHADER_TEMPLATES = [
     desc: 'Radial sin pulses + sharp smoothstep edges = cyberpunk neon.',   load: tplNeonRings },
   { id: 'staticGrain',     name: 'Static Grain',     category:'showcase',
     desc: 'Animated per-pixel random — showcases the Random node (with Time seed).', load: tplStaticGrain },
+  { id: 'topography',      name: 'Topography',       category:'showcase',
+    desc: 'Contour-line topo map over drifting pastel elevation tint.',      load: tplTopography },
+  { id: 'crystal',         name: 'Crystal',          category:'showcase',
+    desc: 'Iridescence + Fresnel rim light — oil-slick crystal shimmer.',    load: tplCrystal },
+  { id: 'stainedGlass',    name: 'Stained Glass',    category:'showcase',
+    desc: 'Voronoi cells + cosine palette through a slowly-rotating UV.',    load: tplStainedGlass },
+  { id: 'mandala',         name: 'Mandala',          category:'showcase',
+    desc: 'Kaleidoscope + Voronoi + Palette — slowly-rotating N-fold symmetry.', load: tplMandala },
+  { id: 'pixelFlow',       name: 'Pixel Flow',       category:'showcase',
+    desc: '48×48 pixelated grid over animated Ridged FBM, palette-tinted and posterized.', load: tplPixelFlow },
+  { id: 'cosmicStar',      name: 'Cosmic Star',      category:'showcase',
+    desc: 'Soft Glow halo + 6-point Starburst + HDR tonemap — fake bloom stack.', load: tplCosmicStar },
+  { id: 'plaid',           name: 'Plaid',            category:'showcase',
+    desc: 'Crossed Stripes × two pastel colors — warm/cool tartan weave.',   load: tplPlaid },
+  { id: 'vortex',          name: 'Vortex',           category:'showcase',
+    desc: 'Swirl + noise-driven Warp UV feeding an FBM palette field.',      load: tplVortex },
+  { id: 'sdfShapes',       name: 'SDF Shapes',       category:'showcase',
+    desc: 'Circle + animated Box combined via Min, palette-colored.',        load: tplSDFShapes },
+  { id: 'bloomStar',       name: 'Bloom Star',       category:'showcase',
+    desc: 'Bright star on starry sky with REAL post-process bloom enabled.', load: tplBloomStar },
 ];

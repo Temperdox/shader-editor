@@ -138,8 +138,20 @@ function compileGraph(){
   }
 
   // helper blocks, ordered so dependencies come first
-  // (snoise → fbm → {marble, heightField}; rngHash3 is standalone.)
-  const HELPER_RANK = { snoise: 0, fbm: 1, marble: 2, heightField: 2, rngHash3: 0 };
+  // (snoise → fbm → {marble, heightField}; the rest are standalone.)
+  const HELPER_RANK = {
+    snoise:      0,
+    fbm:         1,
+    marble:      2,
+    heightField: 2,
+    ridgedFbm:   1,   // depends on snoise, peer of fbm
+    rngHash3:    0,
+    voronoi2:    0,
+    hsv2rgb:     0,
+    rgb2hsv:     0,
+    palette:     0,
+    rotateVec3:  0,
+  };
   const preludeHelpers = [...helpers]
     .sort((a, b) => (HELPER_RANK[a] ?? 9) - (HELPER_RANK[b] ?? 9))
     .map(k => SHADER_HELPERS[k])

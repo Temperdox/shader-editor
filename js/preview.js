@@ -54,6 +54,7 @@ const PREVIEW = (() => {
   let active = false;
   let texRegistry = null;        // lazy-created on first ensureGL()
   let textureBindings = [];      // { nodeId, uniformName, slot, location }
+  let bloom = null;              // lazy-created bloom pipeline (shared across re-entries)
 
   // Cached backbuffer dimensions — updated only by the ResizeObserver, never
   // inside the render loop. Reading `getBoundingClientRect()` on a canvas
@@ -140,6 +141,8 @@ const PREVIEW = (() => {
     // (GL objects aren't shareable across contexts). Sources are shared
     // through the global imageCache so you don't re-download on re-entry.
     texRegistry = createTextureRegistry(gl);
+    // Dedicated bloom pipeline for this context too — same reason.
+    bloom = createBloomPipeline(gl);
     return true;
   }
 
@@ -229,15 +232,46 @@ const PREVIEW = (() => {
   function frame(){
     if (!active) return;
     if (gl && program){
-      gl.useProgram(program);
-      gl.uniform1f(uTime, (performance.now() - startTime) / 1000);
-      gl.uniform2f(uMouse, shaderMX, shaderMY);
-      gl.uniform2f(uRes, faceCanvas.width, faceCanvas.height);
-      for (const b of textureBindings){
-        gl.activeTexture(gl.TEXTURE0 + b.slot);
-        gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+      // Same bloom branch as the editor renderer — read Output node's
+      // bloom params each frame and route through either the multi-pass
+      // pipeline or direct-to-canvas.
+      const outNode = state.nodes.find(n => n.type === 'output');
+      const bloomOn = outNode && outNode.params && outNode.params.bloom === 'on';
+      const bp = (outNode && outNode.params) || {};
+
+      const drawScene = () => {
+        gl.useProgram(program);
+        gl.uniform1f(uTime, (performance.now() - startTime) / 1000);
+        gl.uniform2f(uMouse, shaderMX, shaderMY);
+        gl.uniform2f(uRes, faceCanvas.width, faceCanvas.height);
+        for (const b of textureBindings){
+          gl.activeTexture(gl.TEXTURE0 + b.slot);
+          gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+        }
+        // re-bind the program's attribs — bloom passes use their own quad
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        const aPos = gl.getAttribLocation(program, 'a_position');
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+        const aUv = gl.getAttribLocation(program, 'a_uv');
+        gl.enableVertexAttribArray(aUv);
+        gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      };
+
+      if (bloomOn && bloom){
+        bloom.renderToScene(faceCanvas.width, faceCanvas.height, drawScene);
+        bloom.applyBloomToScreen({
+          threshold: bp.bloomThreshold,
+          radius:    bp.bloomRadius,
+          intensity: bp.bloomIntensity,
+        });
+      } else {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, faceCanvas.width, faceCanvas.height);
+        drawScene();
       }
-      gl.drawArrays(gl.TRIANGLES, 0, 6);
     }
     rafId = requestAnimationFrame(frame);
   }

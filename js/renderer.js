@@ -32,6 +32,11 @@ const renderer = (() => {
   // uniform to a node id whose image we bind on the active texture slot.
   let textureBindings = [];
 
+  // Bloom pipeline — lazily used when the Output node's `bloom` param
+  // is on. Created once for this context; FBOs internally (re)allocate
+  // on viewport resize.
+  const bloom = createBloomPipeline(gl);
+
   // persistent fullscreen quad buffers (reused across program swaps)
   const posBuf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
@@ -144,18 +149,52 @@ const renderer = (() => {
     if (!hidden){
       resize();
       if (program){
-        gl.useProgram(program);
-        gl.uniform1f(uTime, (performance.now() - start) / 1000);
-        gl.uniform2f(uMouse, mx, my);
-        gl.uniform2f(uRes, canvas.width, canvas.height);
-        // Bind each sampler's current backing texture. Registry returns a
-        // 1×1 placeholder when the image hasn't loaded, so the draw never
-        // blocks on a missing texture.
-        for (const b of textureBindings){
-          gl.activeTexture(gl.TEXTURE0 + b.slot);
-          gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+        // Read bloom config directly from the Output node each frame.
+        // Toggling bloom on/off doesn't require a shader recompile — it
+        // just switches the render pipeline between direct-to-screen and
+        // the 3-pass FBO chain below.
+        const outNode = state.nodes.find(n => n.type === 'output');
+        const bloomOn = outNode && outNode.params && outNode.params.bloom === 'on';
+        const bp = outNode && outNode.params || {};
+
+        // shared scene-draw: bind user program, set uniforms + textures,
+        // draw the fullscreen triangle pair. Used by both paths.
+        const drawScene = () => {
+          gl.useProgram(program);
+          gl.uniform1f(uTime, (performance.now() - start) / 1000);
+          gl.uniform2f(uMouse, mx, my);
+          gl.uniform2f(uRes, canvas.width, canvas.height);
+          for (const b of textureBindings){
+            gl.activeTexture(gl.TEXTURE0 + b.slot);
+            gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+          }
+          // re-bind the user program's vertex attribs in case bloom passes
+          // (which use their own quad buffers) left them dangling
+          gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+          const aPos = gl.getAttribLocation(program, 'a_position');
+          gl.enableVertexAttribArray(aPos);
+          gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+          const aUv = gl.getAttribLocation(program, 'a_uv');
+          gl.enableVertexAttribArray(aUv);
+          gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
+          gl.drawArrays(gl.TRIANGLES, 0, 6);
+        };
+
+        if (bloomOn){
+          // 3-pass: scene → FBO, H-blur+threshold, V-blur+composite → screen
+          bloom.renderToScene(canvas.width, canvas.height, drawScene);
+          bloom.applyBloomToScreen({
+            threshold: bp.bloomThreshold,
+            radius:    bp.bloomRadius,
+            intensity: bp.bloomIntensity,
+          });
+        } else {
+          // direct-to-screen (existing fast path)
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          drawScene();
         }
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
       }
     }
     requestAnimationFrame(frame);

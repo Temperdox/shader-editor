@@ -93,6 +93,85 @@ float rngHash3(vec3 p){
   p += dot(p, p.zyx + 19.19);
   return fract((p.x + p.y) * p.z);
 }`,
+  voronoi2: `
+/* 2D Voronoi / cellular noise. For each uv we scan the 3×3 integer-cell
+   neighborhood, hash-place one point in each cell, and track the closest
+   point. Returns .x = distance to nearest point (≥0, small near centers,
+   ~0.7 toward cell boundaries) and .y = a random ID hashed from the
+   closest cell's integer coords — perfect for coloring each cell. */
+vec2 voronoi2(vec2 uv){
+  vec2 iuv = floor(uv);
+  vec2 fuv = fract(uv);
+  float md = 1.0;
+  vec2 mc = vec2(0.0);
+  for (int y = -1; y <= 1; y++){
+    for (int x = -1; x <= 1; x++){
+      vec2 g = vec2(float(x), float(y));
+      vec2 cell = iuv + g;
+      vec2 h  = vec2(dot(cell, vec2(127.1, 311.7)), dot(cell, vec2(269.5, 183.3)));
+      vec2 pt = fract(sin(h) * 43758.5453);
+      float d = length(g + pt - fuv);
+      if (d < md){ md = d; mc = cell; }
+    }
+  }
+  float id = fract(sin(dot(mc, vec2(127.1, 311.7))) * 43758.5453);
+  return vec2(md, id);
+}`,
+  hsv2rgb: `
+/* HSV → RGB. Hue in [0, 1] (not radians), saturation and value in [0, 1].
+   Standard iq formulation — branchless, fast. */
+vec3 hsv2rgb(vec3 c){
+  vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+  vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+  return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}`,
+  palette: `
+/* Inigo Quilez's cosine palette. Five inputs control any cyclic color
+   scheme: brightness (a), contrast (b), frequency per channel (c), phase
+   per channel (d). Defaults (0.5, 0.5, 1, {0, 0.33, 0.67}) give a rainbow
+   as t goes 0→1. See iquilezles.org/articles/palettes. */
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d){
+  return a + b * cos(6.28318 * (c * t + d));
+}`,
+  ridgedFbm: `
+/* Ridged fractal Brownian motion. Takes absolute values of the noise
+   samples and inverts them, which turns smooth blobs into sharp ridges
+   — exactly the silhouette of mountain ranges, canyon networks, or
+   cracked earth. Accumulates octaves the same way fbm() does. */
+float ridgedFbm(vec3 p, float octaves){
+  float value = 0.0;
+  float amp = 0.5;
+  float freq = 1.0;
+  int n = int(octaves);
+  for (int i = 0; i < 8; i++){
+    if (i >= n) break;
+    float s = snoise(p * freq);
+    value += amp * (1.0 - abs(s));
+    freq *= 2.1;
+    amp *= 0.48;
+  }
+  return value;
+}`,
+  rgb2hsv: `
+/* RGB → HSV conversion. Inverse of hsv2rgb above. Hue in [0,1]. */
+vec3 rgb2hsv(vec3 c){
+  vec4 K = vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0);
+  vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  float e = 1.0e-10;
+  return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
+}`,
+  rotateVec3: `
+/* Rodrigues' rotation formula — rotate a vec3 around an arbitrary axis
+   by an angle in radians. Used by Rotate Vec3 node for lighting /
+   normal-map tricks. */
+vec3 rotateVec3(vec3 v, vec3 axis, float angle){
+  axis = normalize(axis);
+  float c = cos(angle);
+  float s = sin(angle);
+  return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}`,
 };
 
 /* ---------------- node type registry ----------------
@@ -265,6 +344,17 @@ const NODE_TYPES = {
     // per-frame flicker that a continuous seed produces.
     generate:(ctx) => ({ exprs:{ out:`floor(${ctx.inputs.x})` } }),
   },
+  fract: {
+    category:'Math', title:'Fract', desc:'fract(x) — fractional part (x − floor(x))',
+    inputs:[{name:'x', type:'float', default:0}],
+    outputs:[{name:'out', type:'float'}],
+    // Pairs nicely with Floor: fract(t) gives the 0..1 progress within the
+    // current Floor tick. Also the standard trick for building periodic
+    // banding effects — e.g. fract(elevation × 10) produces a repeating
+    // 0..1 value per elevation tier, which is how topographic contours get
+    // rendered.
+    generate:(ctx) => ({ exprs:{ out:`fract(${ctx.inputs.x})` } }),
+  },
   sin: {
     category:'Math', title:'Sin', desc:'sin(x)',
     inputs:[{name:'x', type:'float', default:0}],
@@ -306,6 +396,80 @@ const NODE_TYPES = {
     inputs:[{name:'v', type:'vec2', default:[0,0]}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`length(${ctx.inputs.v})` } }),
+  },
+  dot: {
+    category:'Math', title:'Dot', desc:'dot(a, b) — vec3 · vec3 → float',
+    inputs:[
+      {name:'a', type:'vec3', default:[1, 0, 0]},
+      {name:'b', type:'vec3', default:[0, 0, 1]},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // The primitive behind every diffuse-lighting calculation. Also the
+    // building block for Fresnel and any angle-dependent effect.
+    generate:(ctx) => ({ exprs:{ out:`dot(${ctx.inputs.a}, ${ctx.inputs.b})` } }),
+  },
+  cross: {
+    category:'Math', title:'Cross', desc:'cross(a, b) — vec3 × vec3 → vec3',
+    inputs:[
+      {name:'a', type:'vec3', default:[1, 0, 0]},
+      {name:'b', type:'vec3', default:[0, 1, 0]},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    generate:(ctx) => ({ exprs:{ out:`cross(${ctx.inputs.a}, ${ctx.inputs.b})` } }),
+  },
+  min: {
+    category:'Math', title:'Min', desc:'min(a, b)',
+    inputs:[
+      {name:'a', type:'float', default:0},
+      {name:'b', type:'float', default:0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{ out:`min(${ctx.inputs.a}, ${ctx.inputs.b})` } }),
+  },
+  max: {
+    category:'Math', title:'Max', desc:'max(a, b)',
+    inputs:[
+      {name:'a', type:'float', default:0},
+      {name:'b', type:'float', default:0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{ out:`max(${ctx.inputs.a}, ${ctx.inputs.b})` } }),
+  },
+  pulse: {
+    category:'Math', title:'Pulse', desc:'0→1→0 sinusoidal pulse (freq = cycles/unit)',
+    inputs:[
+      {name:'t',    type:'float', default:0},
+      {name:'freq', type:'float', default:1},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // `0.5 + 0.5*sin(2π·t·freq)` — clean 0..1 oscillation. Feed `t = Time`
+    // for a steady rhythm, or `t = position.x * someScale` for a spatial
+    // wave. freq controls how many cycles per unit of t.
+    generate:(ctx) => ({ exprs:{
+      out: `(0.5 + 0.5 * sin(${ctx.inputs.t} * ${ctx.inputs.freq} * 6.28318))`,
+    } }),
+  },
+  ease: {
+    category:'Math', title:'Ease', desc:'easing curve on 0..1 (in / out / inOut)',
+    inputs:[{name:'t', type:'float', default:0.5}],
+    outputs:[{name:'out', type:'float'}],
+    params:[{name:'mode', kind:'segmented', default:'inOut', options:['in', 'out', 'inOut']}],
+    // Reshapes a 0..1 linear progression into an eased curve. `in` is
+    // slow-start / fast-end (t²); `out` is fast-start / slow-end (1−(1−t)²);
+    // `inOut` is the classic S-curve (smoothstep). Wrap it around any
+    // linear driver to make animations feel less mechanical.
+    generate:(ctx) => {
+      const t = ctx.tmp('et');
+      const clamp = `clamp(${ctx.inputs.t}, 0.0, 1.0)`;
+      if (ctx.params.mode === 'in'){
+        return { setup: `float ${t} = ${clamp};`, exprs:{ out:`(${t} * ${t})` } };
+      }
+      if (ctx.params.mode === 'out'){
+        return { setup: `float ${t} = ${clamp};`, exprs:{ out:`(1.0 - (1.0 - ${t}) * (1.0 - ${t}))` } };
+      }
+      // inOut — cubic smoothstep
+      return { setup: `float ${t} = ${clamp};`, exprs:{ out:`(${t} * ${t} * (3.0 - 2.0 * ${t}))` } };
+    },
   },
   /* Random — pseudo-random float from any combination of seeds.
      Provides THREE optional seed inputs (float / vec2 / vec3) so you can
@@ -436,6 +600,285 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
     outputs:[{name:'out', type:'vec3'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.n} * 0.5 + 0.5)` } }),
   },
+  rotateUV: {
+    category:'Vector', title:'Rotate UV', desc:'rotate a vec2 around a pivot by angle (rad)',
+    inputs:[
+      {name:'uv',    type:'vec2',  default:[0.5, 0.5]},
+      {name:'angle', type:'float', default:0},
+      {name:'pivot', type:'vec2',  default:[0.5, 0.5]},
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    // 2×2 rotation matrix applied around an offset pivot (default = center
+    // of the UV square). Feeding `angle = Time` gives a continuously-
+    // rotating UV — useful for spinning any pattern in-place.
+    generate:(ctx) => {
+      const cs = ctx.tmp('rc');
+      const sn = ctx.tmp('rs');
+      const q  = ctx.tmp('rq');
+      return {
+        setup:
+`float ${cs} = cos(${ctx.inputs.angle});
+float ${sn} = sin(${ctx.inputs.angle});
+vec2 ${q}   = ${ctx.inputs.uv} - ${ctx.inputs.pivot};`,
+        exprs:{
+          out: `vec2(${cs} * ${q}.x - ${sn} * ${q}.y, ${sn} * ${q}.x + ${cs} * ${q}.y) + ${ctx.inputs.pivot}`,
+        },
+      };
+    },
+  },
+  polar: {
+    category:'Vector', title:'Polar', desc:'vec2 → (radius, angle) around a pivot',
+    inputs:[
+      {name:'uv',    type:'vec2', default:[0.5, 0.5]},
+      {name:'pivot', type:'vec2', default:[0.5, 0.5]},
+    ],
+    outputs:[
+      {name:'radius', type:'float'},
+      {name:'angle',  type:'float'},
+    ],
+    // Converts cartesian UV into polar coordinates relative to a pivot.
+    // `angle` is in radians in the range (−π, π] — same as atan2. Pair
+    // with Rotate UV, Fract, Smoothstep, etc. to build radial patterns
+    // (spirals, pie wedges, kaleidoscopes, sundials, clocks).
+    generate:(ctx) => {
+      const d = ctx.tmp('pd');
+      return {
+        setup: `vec2 ${d} = ${ctx.inputs.uv} - ${ctx.inputs.pivot};`,
+        exprs:{
+          radius: `length(${d})`,
+          angle:  `atan(${d}.y, ${d}.x)`,
+        },
+      };
+    },
+  },
+  hsv2rgb: {
+    category:'Vector', title:'HSV → RGB', desc:'hue (0..1) + sat + value → RGB',
+    inputs:[
+      {name:'h', type:'float', default:0},
+      {name:'s', type:'float', default:1},
+      {name:'v', type:'float', default:1},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    helpers:['hsv2rgb'],
+    // Hue is on a 0..1 scale (not degrees or radians) — one full rotation
+    // at h=1. Animate by feeding `h = Time` (scaled) for continuous hue
+    // shift, or `h = dot(normal, view)` for iridescence-style angle tint.
+    generate:(ctx) => ({ exprs:{
+      out: `hsv2rgb(vec3(${ctx.inputs.h}, ${ctx.inputs.s}, ${ctx.inputs.v}))`,
+    } }),
+  },
+  palette: {
+    category:'Vector', title:'Palette', desc:'iq cosine palette: a + b·cos(2π·(c·t + d))',
+    inputs:[
+      {name:'t', type:'float', default:0},
+      {name:'a', type:'vec3',  default:[0.5, 0.5, 0.5]},
+      {name:'b', type:'vec3',  default:[0.5, 0.5, 0.5]},
+      {name:'c', type:'vec3',  default:[1.0, 1.0, 1.0]},
+      {name:'d', type:'vec3',  default:[0.0, 0.33, 0.67]},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    helpers:['palette'],
+    // Unconnected defaults produce a full rainbow as t goes 0→1. Override
+    // any of a/b/c/d via a Combine or Color node to tune the scheme —
+    // examples of good presets live on iq's palette page.
+    generate:(ctx) => ({ exprs:{
+      out: `palette(${ctx.inputs.t}, ${ctx.inputs.a}, ${ctx.inputs.b}, ${ctx.inputs.c}, ${ctx.inputs.d})`,
+    } }),
+  },
+  kaleidoscope: {
+    category:'Vector', title:'Kaleidoscope', desc:'N-fold mirror fold around a pivot',
+    inputs:[
+      {name:'uv',      type:'vec2',  default:[0.5, 0.5]},
+      {name:'sectors', type:'float', default:6},
+      {name:'pivot',   type:'vec2',  default:[0.5, 0.5]},
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    // Converts to polar, folds the angle into one sector via `mod`, then
+    // mirrors that sector with `abs(a - sectorWidth/2)`. The result is a
+    // UV space with N-fold symmetry — feed it into ANY downstream pattern
+    // (noise, voronoi, whatever) to get instant kaleidoscope visuals.
+    generate:(ctx) => {
+      const d  = ctx.tmp('kd');
+      const r  = ctx.tmp('kr');
+      const a  = ctx.tmp('ka');
+      const sw = ctx.tmp('ksw');
+      return {
+        setup:
+`vec2 ${d}   = ${ctx.inputs.uv} - ${ctx.inputs.pivot};
+float ${r}  = length(${d});
+float ${a}  = atan(${d}.y, ${d}.x);
+float ${sw} = 6.28318 / max(${ctx.inputs.sectors}, 1.0);
+${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
+        exprs:{
+          out: `(vec2(cos(${a}), sin(${a})) * ${r} + ${ctx.inputs.pivot})`,
+        },
+      };
+    },
+  },
+  pixelate: {
+    category:'Vector', title:'Pixelate', desc:'quantize UV to an N × N grid',
+    inputs:[
+      {name:'uv',    type:'vec2',  default:[0, 0]},
+      {name:'cells', type:'float', default:48},
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    // `floor(uv * cells) / cells` snaps each pixel to the bottom-left of
+    // its containing cell. Downstream patterns then see one constant UV
+    // per cell — instant blocky / retro / 8-bit look when fed into smooth
+    // patterns.
+    generate:(ctx) => ({ exprs:{
+      out: `(floor(${ctx.inputs.uv} * ${ctx.inputs.cells}) / ${ctx.inputs.cells})`,
+    } }),
+  },
+  chromaShiftUV: {
+    category:'Vector', title:'Chromatic UV', desc:'three offset UVs for R/G/B prism split',
+    inputs:[
+      {name:'uv',        type:'vec2',  default:[0, 0]},
+      {name:'direction', type:'vec2',  default:[1, 0]},
+      {name:'amount',    type:'float', default:0.01},
+    ],
+    outputs:[
+      {name:'uvR', type:'vec2'},
+      {name:'uvG', type:'vec2'},
+      {name:'uvB', type:'vec2'},
+    ],
+    // True chromatic aberration needs to sample the rendered image at
+    // three offsets, which we can't do single-pass. This node gives you
+    // the three UVs; wire each into a COPY of your pattern path and
+    // feed the outputs as R/G/B into a Combine — that's the workaround.
+    generate:(ctx) => {
+      const d = ctx.tmp('cdir');
+      return {
+        setup: `vec2 ${d} = ${ctx.inputs.direction} * ${ctx.inputs.amount};`,
+        exprs:{
+          uvR: `(${ctx.inputs.uv} - ${d})`,
+          uvG: ctx.inputs.uv,
+          uvB: `(${ctx.inputs.uv} + ${d})`,
+        },
+      };
+    },
+  },
+  rgb2hsv: {
+    category:'Vector', title:'RGB → HSV', desc:'inverse of HSV→RGB',
+    inputs:[{name:'rgb', type:'vec3', default:[1, 0, 0]}],
+    outputs:[
+      {name:'h', type:'float'},
+      {name:'s', type:'float'},
+      {name:'v', type:'float'},
+    ],
+    helpers:['rgb2hsv'],
+    generate:(ctx) => {
+      const hsv = ctx.tmp('hsv');
+      return {
+        setup: `vec3 ${hsv} = rgb2hsv(${ctx.inputs.rgb});`,
+        exprs:{
+          h: `${hsv}.x`,
+          s: `${hsv}.y`,
+          v: `${hsv}.z`,
+        },
+      };
+    },
+  },
+  hueShift: {
+    category:'Vector', title:'Hue Shift', desc:'rotate hue of an RGB color by amount (0..1 = full rotation)',
+    inputs:[
+      {name:'rgb',    type:'vec3',  default:[1, 0, 0]},
+      {name:'amount', type:'float', default:0.0},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    helpers:['rgb2hsv', 'hsv2rgb'],
+    // Round-trips the color through HSV, adds `amount` to the hue, wraps
+    // with fract(), converts back. amount=0.5 flips to complementary color;
+    // amount=Time gives continuous hue cycling.
+    generate:(ctx) => {
+      const hsv = ctx.tmp('hs');
+      return {
+        setup: `vec3 ${hsv} = rgb2hsv(${ctx.inputs.rgb});`,
+        exprs:{
+          out: `hsv2rgb(vec3(fract(${hsv}.x + ${ctx.inputs.amount}), ${hsv}.y, ${hsv}.z))`,
+        },
+      };
+    },
+  },
+  saturation: {
+    category:'Vector', title:'Saturation', desc:'scale saturation (0 = gray, 1 = unchanged, >1 = boosted)',
+    inputs:[
+      {name:'rgb',   type:'vec3',  default:[1, 0, 0]},
+      {name:'scale', type:'float', default:1.0},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // Luminance-preserving saturation control. `mix(gray, color, scale)`
+    // where gray = luma. Scale 0 → grayscale; 1 → identity; >1 → vivid.
+    generate:(ctx) => {
+      const lum = ctx.tmp('sl');
+      return {
+        setup: `float ${lum} = dot(${ctx.inputs.rgb}, vec3(0.299, 0.587, 0.114));`,
+        exprs:{
+          out: `mix(vec3(${lum}), ${ctx.inputs.rgb}, ${ctx.inputs.scale})`,
+        },
+      };
+    },
+  },
+  rotateVec3: {
+    category:'Vector', title:'Rotate Vec3', desc:'rotate vec3 around axis by angle (rad)',
+    inputs:[
+      {name:'v',     type:'vec3',  default:[1, 0, 0]},
+      {name:'axis',  type:'vec3',  default:[0, 1, 0]},
+      {name:'angle', type:'float', default:0},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    helpers:['rotateVec3'],
+    // Rodrigues' formula for rotating any vec3 around any axis. Useful
+    // for rotating normals for custom lighting or animating vectors.
+    generate:(ctx) => ({ exprs:{
+      out: `rotateVec3(${ctx.inputs.v}, ${ctx.inputs.axis}, ${ctx.inputs.angle})`,
+    } }),
+  },
+  warpUV: {
+    category:'Vector', title:'Warp UV', desc:'uv + warp (domain warp — use noise as warp source)',
+    inputs:[
+      {name:'uv',   type:'vec2',  default:[0, 0]},
+      {name:'warp', type:'vec2',  default:[0, 0]},
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    // Basic domain warp: offset the UV by another vec2 source. Classic
+    // use: build a vec2 from two scaled simplex-noise samples and feed
+    // it here to warp the input to a downstream pattern.
+    generate:(ctx) => ({ exprs:{
+      out: `(${ctx.inputs.uv} + ${ctx.inputs.warp})`,
+    } }),
+  },
+  swirl: {
+    category:'Vector', title:'Swirl', desc:'spiral rotation — angle grows with distance from center',
+    inputs:[
+      {name:'uv',       type:'vec2',  default:[0.5, 0.5]},
+      {name:'center',   type:'vec2',  default:[0.5, 0.5]},
+      {name:'strength', type:'float', default:5.0},
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    // Classic vortex. For each point, the rotation angle depends on its
+    // distance from center: angle = strength · radius. Points near center
+    // barely move; points far away twist a lot — the swirl you get when
+    // you stir a liquid. Use a negative strength to reverse direction.
+    generate:(ctx) => {
+      const d  = ctx.tmp('sd');
+      const r  = ctx.tmp('sr');
+      const a  = ctx.tmp('sa');
+      const cs = ctx.tmp('scs');
+      const sn = ctx.tmp('ssn');
+      return {
+        setup:
+`vec2 ${d}  = ${ctx.inputs.uv} - ${ctx.inputs.center};
+float ${r} = length(${d});
+float ${a} = ${ctx.inputs.strength} * ${r};
+float ${cs} = cos(${a});
+float ${sn} = sin(${a});`,
+        exprs:{
+          out: `(vec2(${cs} * ${d}.x - ${sn} * ${d}.y, ${sn} * ${d}.x + ${cs} * ${d}.y) + ${ctx.inputs.center})`,
+        },
+      };
+    },
+  },
 
   /* ---- patterns ---- */
   simplex: {
@@ -481,6 +924,142 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
       return {
         setup:`float ${v} = snoise(vec3(${ctx.inputs.p} * ${glslNum(ctx.params.frequency)}, ${ctx.inputs.time} * 0.5));`,
         exprs:{ out:`pow(abs(${v}), ${glslNum(ctx.params.sharpness)})` },
+      };
+    },
+  },
+  ridgedFbm: {
+    category:'Pattern', title:'Ridged FBM', desc:'mountain-range noise — 1 − abs(fbm) per octave',
+    inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'z', type:'float', default:0}],
+    outputs:[{name:'out', type:'float'}],
+    params:[{name:'octaves', kind:'number', default:6, min:1, max:8, step:1}],
+    helpers:['snoise', 'ridgedFbm'],
+    generate:(ctx) => ({ exprs:{
+      out:`ridgedFbm(vec3(${ctx.inputs.p}, ${ctx.inputs.z}), ${glslNum(ctx.params.octaves)})`,
+    } }),
+  },
+  checkerboard: {
+    category:'Pattern', title:'Checkerboard', desc:'black/white checker grid',
+    inputs:[
+      {name:'uv',    type:'vec2',  default:[0, 0]},
+      {name:'cells', type:'float', default:8},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => {
+      const c = ctx.tmp('ck');
+      return {
+        setup: `vec2 ${c} = floor(${ctx.inputs.uv} * ${ctx.inputs.cells});`,
+        exprs:{ out: `mod(${c}.x + ${c}.y, 2.0)` },
+      };
+    },
+  },
+  stripes: {
+    category:'Pattern', title:'Stripes', desc:'parallel stripes at an angle',
+    inputs:[
+      {name:'uv',        type:'vec2',  default:[0, 0]},
+      {name:'angle',     type:'float', default:0},
+      {name:'frequency', type:'float', default:10},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Rotates UV by `angle` then bands along x at `frequency`. Returns a
+    // 0..1 mask with crisp anti-aliased edges — 0 in one stripe, 1 in the
+    // other. angle=0 → horizontal, π/2 → vertical, π/4 → diagonal.
+    generate:(ctx) => {
+      const c = ctx.tmp('sc');
+      const s = ctx.tmp('ss');
+      const x = ctx.tmp('sx');
+      return {
+        setup:
+`float ${c} = cos(${ctx.inputs.angle});
+float ${s} = sin(${ctx.inputs.angle});
+float ${x} = ${c} * ${ctx.inputs.uv}.x + ${s} * ${ctx.inputs.uv}.y;`,
+        exprs:{ out: `smoothstep(0.48, 0.52, fract(${x} * ${ctx.inputs.frequency}))` },
+      };
+    },
+  },
+  grid: {
+    category:'Pattern', title:'Grid', desc:'thin lines at cell boundaries',
+    inputs:[
+      {name:'uv',        type:'vec2',  default:[0, 0]},
+      {name:'cells',     type:'float', default:10},
+      {name:'lineWidth', type:'float', default:0.04},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // 1 at cell boundary, 0 inside cell. `min(x, 1-x)` computes distance
+    // to the nearest cell edge along each axis; we pick the smaller of the
+    // two and smoothstep to make an anti-aliased line.
+    generate:(ctx) => {
+      const g = ctx.tmp('gg');
+      const e = ctx.tmp('ge');
+      const d = ctx.tmp('gd');
+      return {
+        setup:
+`vec2 ${g}  = fract(${ctx.inputs.uv} * ${ctx.inputs.cells});
+vec2 ${e}  = min(${g}, 1.0 - ${g});
+float ${d} = min(${e}.x, ${e}.y);`,
+        exprs:{
+          out: `(1.0 - smoothstep(0.0, ${ctx.inputs.lineWidth}, ${d}))`,
+        },
+      };
+    },
+  },
+  sdfCircle: {
+    category:'Pattern', title:'SDF Circle', desc:'signed distance to a circle (neg inside)',
+    inputs:[
+      {name:'p',      type:'vec2',  default:[0, 0]},
+      {name:'center', type:'vec2',  default:[0, 0]},
+      {name:'radius', type:'float', default:0.3},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Signed distance field: 0 on the circle edge, negative inside,
+    // positive outside. Feed into smoothstep(0, edgeWidth, d) for a
+    // filled disk, or abs(d) < thickness for a ring outline.
+    generate:(ctx) => ({ exprs:{
+      out: `(length(${ctx.inputs.p} - ${ctx.inputs.center}) - ${ctx.inputs.radius})`,
+    } }),
+  },
+  sdfBox: {
+    category:'Pattern', title:'SDF Box', desc:'signed distance to an axis-aligned box',
+    inputs:[
+      {name:'p',      type:'vec2',  default:[0, 0]},
+      {name:'center', type:'vec2',  default:[0, 0]},
+      {name:'size',   type:'vec2',  default:[0.3, 0.2]},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Classic box SDF. `size` is the half-extent on each axis (so a
+    // size of (0.3, 0.2) makes a 0.6 × 0.4 box). Compose with sdfCircle
+    // via Min (union), Max (intersection), or Max(a, -b) (subtraction).
+    generate:(ctx) => {
+      const d = ctx.tmp('bd');
+      return {
+        setup: `vec2 ${d} = abs(${ctx.inputs.p} - ${ctx.inputs.center}) - ${ctx.inputs.size};`,
+        exprs:{
+          out: `(length(max(${d}, 0.0)) + min(max(${d}.x, ${d}.y), 0.0))`,
+        },
+      };
+    },
+  },
+  voronoi: {
+    category:'Pattern', title:'Voronoi', desc:'cellular noise — distance + cell-id',
+    inputs:[
+      {name:'p',     type:'vec2',  default:[0, 0]},
+      {name:'scale', type:'float', default:5},
+    ],
+    outputs:[
+      {name:'dist', type:'float'},  // 0 at cell center, grows toward boundaries
+      {name:'id',   type:'float'},  // uniform-random [0, 1) per cell, stable across frames
+    ],
+    helpers:['voronoi2'],
+    // `dist` is the classic cellular-noise field — threshold it for cracks,
+    // stripes for scales, or isolines. `id` gives a stable per-cell random,
+    // perfect as the `t` input to a Palette for stained-glass coloring.
+    generate:(ctx) => {
+      const v = ctx.tmp('vv');
+      return {
+        setup: `vec2 ${v} = voronoi2(${ctx.inputs.p} * ${ctx.inputs.scale});`,
+        exprs:{
+          dist: `${v}.x`,
+          id:   `${v}.y`,
+        },
       };
     },
   },
@@ -594,6 +1173,168 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
   },
 
   /* ---- effects ---- */
+  posterize: {
+    category:'Effect', title:'Posterize', desc:'quantize each color channel to N levels',
+    inputs:[
+      {name:'color',  type:'vec3',  default:[0, 0, 0]},
+      {name:'levels', type:'float', default:4},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // `floor(c * levels) / levels` snaps each channel to a discrete stair.
+    // Low levels (3–5) give a cel-shaded / screen-print look; higher
+    // levels (16–32) just round off subtle gradients.
+    generate:(ctx) => ({ exprs:{
+      out: `(floor(${ctx.inputs.color} * ${ctx.inputs.levels}) / ${ctx.inputs.levels})`,
+    } }),
+  },
+  threshold: {
+    category:'Effect', title:'Threshold', desc:'keep colors brighter than cutoff (bloom prep)',
+    inputs:[
+      {name:'color',    type:'vec3',  default:[0, 0, 0]},
+      {name:'cutoff',   type:'float', default:0.6},
+      {name:'softness', type:'float', default:0.1},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // Extracts "bright" pixels using a luminance-weighted smoothstep. This
+    // is the first half of a traditional bloom pipeline; combine the
+    // output with Soft Glow / HDR Boost to fake the spread and boost.
+    generate:(ctx) => {
+      const lum  = ctx.tmp('thlum');
+      const mask = ctx.tmp('thmask');
+      return {
+        setup:
+`float ${lum}  = dot(${ctx.inputs.color}, vec3(0.299, 0.587, 0.114));
+float ${mask} = smoothstep(${ctx.inputs.cutoff}, ${ctx.inputs.cutoff} + ${ctx.inputs.softness}, ${lum});`,
+        exprs:{ out: `(${ctx.inputs.color} * ${mask})` },
+      };
+    },
+  },
+  softGlow: {
+    category:'Effect', title:'Soft Glow', desc:'radial glow from a point — gaussian falloff',
+    inputs:[
+      {name:'pos',    type:'vec2',  default:[0.5, 0.5]},
+      {name:'center', type:'vec2',  default:[0.5, 0.5]},
+      {name:'radius', type:'float', default:0.3},
+      {name:'color',  type:'vec3',  default:[1, 1, 1]},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // Cheap bloom-like "halo" emitter. Emits `color` at `center`, falling
+    // off smoothly over `radius` with a gaussian curve. Stack multiple
+    // Soft Glows (Blend → Add) to fake multiple glowing points, or place
+    // one at the position of a bright feature in your shader.
+    generate:(ctx) => {
+      const diff = ctx.tmp('gdiff');
+      const d = ctx.tmp('gd');
+      const i = ctx.tmp('gi');
+      return {
+        setup:
+`vec2 ${diff} = ${ctx.inputs.pos} - ${ctx.inputs.center};
+float ${d} = length(${diff});
+float ${i} = exp(-(${d} * ${d}) / max(${ctx.inputs.radius} * ${ctx.inputs.radius}, 0.0001));`,
+        exprs:{ out: `(${ctx.inputs.color} * ${i})` },
+      };
+    },
+  },
+  starburst: {
+    category:'Effect', title:'Starburst', desc:'N-point star rays from a center (lens-flare)',
+    inputs:[
+      {name:'pos',       type:'vec2',  default:[0.5, 0.5]},
+      {name:'center',    type:'vec2',  default:[0.5, 0.5]},
+      {name:'points',    type:'float', default:6},
+      {name:'sharpness', type:'float', default:20},
+      {name:'radius',    type:'float', default:0.5},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Makes a lens-flare / anime-sparkle spike pattern. `cos(angle*N)` gives
+    // N peaks around the center; `pow(max(·, 0), sharpness)` thins them to
+    // thin rays. Distance falloff (`1 - smoothstep(0, radius, r)`) fades
+    // the rays out as they leave the center. Feed the output into a
+    // Grayscale → Blend(add) to composite onto a scene.
+    generate:(ctx) => {
+      const d = ctx.tmp('sbd');
+      const r = ctx.tmp('sbr');
+      const a = ctx.tmp('sba');
+      const w = ctx.tmp('sbw');
+      return {
+        setup:
+`vec2 ${d} = ${ctx.inputs.pos} - ${ctx.inputs.center};
+float ${r} = length(${d});
+float ${a} = atan(${d}.y, ${d}.x);
+float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpness});`,
+        exprs:{
+          out: `(${w} * (1.0 - smoothstep(0.0, ${ctx.inputs.radius}, ${r})))`,
+        },
+      };
+    },
+  },
+  hdrBoost: {
+    category:'Effect', title:'HDR Boost', desc:'exposure (in stops) + gamma tonemap',
+    inputs:[
+      {name:'color',    type:'vec3',  default:[0, 0, 0]},
+      {name:'exposure', type:'float', default:0.5},   // EV stops: 0 = no change, +1 = 2× brighter
+      {name:'gamma',    type:'float', default:1.2},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // Last step of a pseudo-bloom pipeline. `exp2(exposure)` gives you
+    // "stops" of brightness (+1 = double, +2 = 4×, etc.). Gamma curve
+    // compresses highlights — numbers > 1 make brights saturate more
+    // gracefully, useful after stacking Soft Glows that push the color
+    // past 1.0.
+    generate:(ctx) => {
+      const c = ctx.tmp('hdrc');
+      return {
+        setup: `vec3 ${c} = ${ctx.inputs.color} * exp2(${ctx.inputs.exposure});`,
+        exprs:{
+          out: `pow(max(${c}, vec3(0.0)), vec3(1.0 / max(${ctx.inputs.gamma}, 0.01)))`,
+        },
+      };
+    },
+  },
+  fresnel: {
+    category:'Effect', title:'Fresnel', desc:'edge-glow factor: pow(1 − |N·V|, power)',
+    inputs:[
+      {name:'normal', type:'vec3',  default:[0, 0, 1]},
+      {name:'view',   type:'vec3',  default:[0, 0, 1]},
+      {name:'power',  type:'float', default:2.5},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Classic rim-glow term. Output ≈ 0 where the surface faces the viewer
+    // (normal parallel to view), ≈ 1 at grazing angles. Multiply a bright
+    // color by this and add on top of your shaded surface for glass / wet /
+    // crystal edges. `power` controls how thin the rim is (higher = thinner).
+    generate:(ctx) => {
+      const d = ctx.tmp('fdot');
+      return {
+        setup: `float ${d} = 1.0 - abs(dot(normalize(${ctx.inputs.normal}), normalize(${ctx.inputs.view})));`,
+        exprs:{ out: `pow(${d}, ${ctx.inputs.power})` },
+      };
+    },
+  },
+  iridescence: {
+    category:'Effect', title:'Iridescence', desc:'angle-shifting rainbow (oil/soap/crystal)',
+    inputs:[
+      {name:'normal', type:'vec3',  default:[0, 0, 1]},
+      {name:'freq',   type:'float', default:4.0},   // number of rainbow cycles as angle sweeps 0→1
+      {name:'bias',   type:'float', default:0.0},   // phase offset — rotates the color wheel
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // Uses the surface normal's Z (toward-viewer) component as the angle
+    // factor. Runs a cosine palette with phase-shifted channels so R, G, B
+    // cycle at different offsets — that's what gives the thin-film rainbow
+    // shift across the surface as the normal varies.
+    generate:(ctx) => {
+      const a = ctx.tmp('ianb');
+      const t = ctx.tmp('itt');
+      return {
+        setup:
+`float ${a} = 1.0 - abs(normalize(${ctx.inputs.normal}).z);
+float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
+        exprs:{
+          out: `(vec3(0.5) + vec3(0.5) * cos(6.28318 * (${t} + vec3(0.0, 0.333, 0.667))))`,
+        },
+      };
+    },
+  },
   vignette: {
     category:'Effect', title:'Vignette', desc:'darken edges',
     inputs:[
@@ -695,9 +1436,22 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
 
   /* ---- terminal ---- */
   output: {
-    category:'Output', title:'Fragment Output', desc:'gl_FragColor',
+    category:'Output', title:'Fragment Output', desc:'gl_FragColor + optional real bloom',
     inputs:[{name:'color', type:'vec3', default:[0,0,0]}],
     outputs:[],
+    // Bloom params are consumed by the renderer (not by `generate`). When
+    // `bloom` is 'on' the renderer switches to a multi-pass pipeline:
+    // render to an offscreen FBO, H-blur with threshold, V-blur, composite.
+    params:[
+      {name:'bloom',          kind:'segmented', default:'off',
+       options:['off','on']},
+      {name:'bloomThreshold', kind:'number', default:0.60, min:0.0, max:2.0, step:0.01,
+       visibleWhen:p => p.bloom === 'on'},
+      {name:'bloomRadius',    kind:'number', default:2.0, min:0.1, max:10.0, step:0.1,
+       visibleWhen:p => p.bloom === 'on'},
+      {name:'bloomIntensity', kind:'number', default:1.0, min:0.0, max:3.0, step:0.05,
+       visibleWhen:p => p.bloom === 'on'},
+    ],
     generate:(ctx) => ({
       setup:`gl_FragColor = vec4(clamp(${ctx.inputs.color}, 0.0, 1.0), 1.0);`,
       exprs:{},
