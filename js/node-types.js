@@ -195,19 +195,43 @@ float sdfTriangle(vec2 p, float r){
   return -length(p) * sign(p.y);
 }`,
   sdfCrystal: `
-/* Composite SDF for a crystal silhouette — a hex body with a pointed
-   pyramid top. Size is (halfWidth, bodyHeight). The tip is a triangle
-   placed above, unioned (min) with the body hex for a smooth outline. */
+/* SDF of a convex pentagon shaped like a standing crystal:
+     apex at (0, +h), two upper shoulders at (±w, 0.4h), two lower corners
+     at (±w, -h).  w = size.x is the half-width, h = size.y the half-height.
+   Computed as a proper polygon SDF (min segment-distance + convex-CCW
+   inside-test) so there are no seams or joint notches. */
 float sdfCrystal(vec2 p, vec2 size){
-  // body: elongated hex (stretch Y by bodyHeight/width)
-  vec2 bp = p;
-  bp.y /= max(size.y / size.x, 0.001);
-  float body = sdfHexagon(bp, size.x) * min(size.y / size.x, 1.0);
-  // tip: triangle above the body
-  vec2 tp = p - vec2(0.0, size.y);
-  float tip = sdfTriangle(tp, size.x * 1.05);
-  // union
-  return min(body, tip);
+  float w = size.x, h = size.y;
+  vec2 v0 = vec2( 0.0,      h     );
+  vec2 v1 = vec2( w,        h*0.4 );
+  vec2 v2 = vec2( w,       -h     );
+  vec2 v3 = vec2(-w,       -h     );
+  vec2 v4 = vec2(-w,        h*0.4 );
+
+  // squared distance to each edge (as a line segment)
+  vec2 pp, e, q;  float t, d;
+  pp = p - v0; e = v1 - v0; t = clamp(dot(pp,e)/dot(e,e), 0.0, 1.0); q = pp - e*t;
+  d = dot(q, q);
+  pp = p - v1; e = v2 - v1; t = clamp(dot(pp,e)/dot(e,e), 0.0, 1.0); q = pp - e*t;
+  d = min(d, dot(q, q));
+  pp = p - v2; e = v3 - v2; t = clamp(dot(pp,e)/dot(e,e), 0.0, 1.0); q = pp - e*t;
+  d = min(d, dot(q, q));
+  pp = p - v3; e = v4 - v3; t = clamp(dot(pp,e)/dot(e,e), 0.0, 1.0); q = pp - e*t;
+  d = min(d, dot(q, q));
+  pp = p - v4; e = v0 - v4; t = clamp(dot(pp,e)/dot(e,e), 0.0, 1.0); q = pp - e*t;
+  d = min(d, dot(q, q));
+
+  // inside test: p is inside the convex CCW polygon iff it's to the LEFT
+  // of every edge (cross(edge, p - v_i) > 0 for all i).
+  float c0 = (v1.x-v0.x)*(p.y-v0.y) - (v1.y-v0.y)*(p.x-v0.x);
+  float c1 = (v2.x-v1.x)*(p.y-v1.y) - (v2.y-v1.y)*(p.x-v1.x);
+  float c2 = (v3.x-v2.x)*(p.y-v2.y) - (v3.y-v2.y)*(p.x-v2.x);
+  float c3 = (v4.x-v3.x)*(p.y-v3.y) - (v4.y-v3.y)*(p.x-v3.x);
+  float c4 = (v0.x-v4.x)*(p.y-v4.y) - (v0.y-v4.y)*(p.x-v4.x);
+  float inside = step(0.0, min(min(min(min(c0, c1), c2), c3), c4));
+  float s = mix(1.0, -1.0, inside);
+
+  return s * sqrt(d);
 }`,
   sdfNormal3D: `
 /* SDF → fake-3D surface normal. Uses screen-space derivatives to get the
@@ -1145,17 +1169,17 @@ float ${d} = min(${e}.x, ${e}.y);`,
     } }),
   },
   sdfCrystal: {
-    category:'Pattern', title:'SDF Crystal', desc:'hex body + pointed tip — crystal silhouette',
+    category:'Pattern', title:'SDF Crystal', desc:'convex pentagon crystal silhouette',
     inputs:[
       {name:'p',      type:'vec2',  default:[0, 0]},
-      {name:'center', type:'vec2',  default:[0, -0.1]},
-      {name:'size',   type:'vec2',  default:[0.18, 0.35]},   // (halfWidth, bodyHeight)
+      {name:'center', type:'vec2',  default:[0, 0]},
+      {name:'size',   type:'vec2',  default:[0.18, 0.45]},  // (halfWidth, halfHeight)
     ],
     outputs:[{name:'out', type:'float'}],
-    helpers:['sdfHexagon', 'sdfTriangle', 'sdfCrystal'],
-    // Composite shape. `size.x` is the half-width of the hex body; `size.y`
-    // is how tall the body is. A triangle cap sits just above the body.
-    // Feed into SDF Normal for fake-3D shading, or SDF Mask to fill it.
+    helpers:['sdfCrystal'],
+    // Convex pentagon — apex up, two upper shoulders, two lower corners.
+    // size.x is the half-width at the shoulders / base; size.y is the
+    // half-height from center to apex. Feed into SDF Mask + SDF Normal.
     generate:(ctx) => ({ exprs:{
       out: `sdfCrystal(${ctx.inputs.p} - ${ctx.inputs.center}, ${ctx.inputs.size})`,
     } }),
@@ -1487,6 +1511,40 @@ float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpn
         exprs:{
           out: `pow(max(${c}, vec3(0.0)), vec3(1.0 / max(${ctx.inputs.gamma}, 0.01)))`,
         },
+      };
+    },
+  },
+  sheenLines: {
+    category:'Effect', title:'Sheen Lines', desc:'thin moving streaks of light (glass/sheen)',
+    inputs:[
+      {name:'uv',        type:'vec2',  default:[0, 0]},
+      {name:'time',      type:'float', default:0},
+      {name:'angle',     type:'float', default:0.5},   // radians, direction of streaks
+      {name:'count',     type:'float', default:3.0},   // number of streaks across UV
+      {name:'speed',     type:'float', default:0.25},  // streak slide rate
+      {name:'thickness', type:'float', default:0.12},  // softness at peak, smaller = thinner
+    ],
+    outputs:[{name:'out', type:'float'}],
+    // Rotates the UV by `angle`, takes a scalar coord along that axis,
+    // offsets it by time*speed, then builds a thin symmetric peak at each
+    // cycle. Output is a [0,1] mask with narrow bright lines separated by
+    // dark — looks like light sliding across a pane of glass. Wrap it with
+    // a Mix (→ iridescence color) and add over a crystal body for sheen.
+    generate:(ctx) => {
+      const c = ctx.tmp('sho_c');
+      const s = ctx.tmp('sho_s');
+      const u = ctx.tmp('sho_u');
+      const f = ctx.tmp('sho_f');
+      const d = ctx.tmp('sho_d');
+      return {
+        setup:
+`float ${c} = cos(${ctx.inputs.angle});
+float ${s} = sin(${ctx.inputs.angle});
+float ${u} = ${c} * ${ctx.inputs.uv}.x + ${s} * ${ctx.inputs.uv}.y;
+float ${f} = fract(${u} * ${ctx.inputs.count} - ${ctx.inputs.time} * ${ctx.inputs.speed});
+float ${d} = abs(${f} - 0.5);`,
+        // peak at d=0 (center of each cycle), falloff controlled by thickness
+        exprs:{ out: `(1.0 - smoothstep(0.0, max(${ctx.inputs.thickness}, 0.001), ${d}))` },
       };
     },
   },

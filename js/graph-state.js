@@ -46,6 +46,8 @@ function _applyGraph(snap){
   }));
   // invalidate selection — ids may not exist in the restored graph
   state.selected.clear();
+  // Keep the uid counter ahead of any IDs restored from the snapshot.
+  syncUidFromState();
 }
 function pushHistory(){
   if (history.suspended) return;
@@ -120,7 +122,13 @@ function makeNode(type, x, y){
     }
   }
 
-  return { id: uid('n'), type, x, y, params, defaults };
+  // Belt-and-suspenders: reject a uid that collides with a node already in
+  // state. If syncUidFromState was skipped somewhere, this keeps the graph
+  // consistent by spinning uid() until we find an unused ID.
+  let id = uid('n');
+  while (state.nodes.some(n => n.id === id)) id = uid('n');
+
+  return { id, type, x, y, params, defaults };
 }
 
 /* ---- default preset ----

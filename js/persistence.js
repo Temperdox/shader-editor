@@ -85,9 +85,14 @@ function deserializeGraph(data){
   }
 
   currentShaderName = data.name || '';
+  // Loaded nodes carry IDs from a prior session — advance the uid counter past
+  // them so subsequently-added nodes don't collide (which manifests as "two
+  // nodes selected when I click one, and a different node moves on drag").
+  syncUidFromState();
   renderAll();
   updateViewportTransform();
   recompileShader();
+  pushHistory();
 }
 
 /* ---------------- localStorage ---------------- */

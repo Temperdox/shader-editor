@@ -4,10 +4,36 @@
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-const uid = (() => {
+// `uid` is a shared monotonically-increasing counter, prefix-scoped:
+//   uid('n') → n1, n2, …     uid('c') → c15, c16, …
+// `uidSyncAtLeast(k)` bumps the counter so the NEXT call returns >= k. Use
+// this after any operation that replaces state with externally-sourced IDs
+// (persistence load, template apply) — otherwise freshly-generated IDs can
+// collide with the loaded ones, producing two nodes with the same ID.
+const { uid, uidSyncAtLeast } = (() => {
   let n = 0;
-  return (p = 'n') => `${p}${(++n).toString(36)}`;
+  const uid = (p = 'n') => `${p}${(++n).toString(36)}`;
+  const uidSyncAtLeast = (k) => { if (k > n) n = k; };
+  return { uid, uidSyncAtLeast };
 })();
+
+// Scan state.nodes + state.connections, parse the numeric suffix out of each
+// prefixed ID (e.g. "n1f" → 63 base-36), and bump the uid counter past the
+// maximum. Call this after any state replacement so subsequent uid() calls
+// are guaranteed unique.
+function syncUidFromState(){
+  let maxN = 0;
+  const scan = (id) => {
+    if (typeof id !== 'string' || id.length < 2) return;
+    const num = parseInt(id.slice(1), 36);
+    if (Number.isFinite(num) && num > maxN) maxN = num;
+  };
+  if (typeof state !== 'undefined' && state){
+    if (state.nodes) for (const nd of state.nodes) scan(nd.id);
+    if (state.connections) for (const co of state.connections) scan(co.id);
+  }
+  uidSyncAtLeast(maxN);
+}
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
