@@ -465,17 +465,289 @@ function tplRadialPulse(){
   c(final, 'out', out, 'color');
 }
 
+/* ============================================================
+ * SHOWCASE TEMPLATES — fun/wild creative shaders to start from.
+ * ============================================================ */
+
+/* ---- Aurora — flowing curtains in aurora green & purple ---- */
+function tplAurora(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv  = n('centeredUV', -760, -20);
+  // slow time so the curtain drift is languid, not frantic
+  const time = n('time',       -760, 180, { scale: 0.25 });
+
+  // warped FBM gives the organic curtain motion
+  const marb = n('marble', -440, 80, { scale: 3.0 });
+
+  // three-layer color ramp: deep-space navy → aurora green → violet hotspots
+  const navy  = n('color', -440, -280, { rgb: [0.02, 0.04, 0.12] });
+  const green = n('color', -440, -440, { rgb: [0.20, 0.95, 0.55] });
+  const violet= n('color', -440, -600, { rgb: [0.55, 0.25, 0.90] });
+
+  // first mix: navy → green across the full pattern
+  const mix1 = n('mix', -80, -60);
+  // second mix: overlay violet only in the brightest bands, via pow(pattern, 3)
+  const pow3 = n('pow',  -80, 140);
+  const p3e  = n('float',-260, 260, { value: 3.0 });
+  const mix2 = n('mix',   260, -20);
+
+  const out  = n('output', 560, -20);
+
+  c(cuv,  'p',       marb, 'p');
+  c(time, 'out',     marb, 'time');
+
+  c(navy,  'out',    mix1, 'a');
+  c(green, 'out',    mix1, 'b');
+  c(marb,  'pattern',mix1, 't');
+
+  c(marb, 'pattern', pow3, 'x');
+  c(p3e,  'out',     pow3, 'e');
+
+  c(mix1,   'out', mix2, 'a');
+  c(violet, 'out', mix2, 'b');
+  c(pow3,   'out', mix2, 't');
+
+  c(mix2, 'out', out, 'color');
+}
+
+/* ---- Lava Flow — molten warped texture with glowing veins ---- */
+function tplLavaFlow(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv  = n('centeredUV', -800, -20);
+  const time = n('time',       -800, 180, { scale: 0.35 });
+
+  const marb  = n('marble', -480,  60, { scale: 4.0 });
+  const veins = n('veins',  -480, 280, { frequency: 5.0, sharpness: 3.0 });
+
+  // molten palette: near-black rock → dark red → orange → hot yellow
+  const black = n('color', -480, -280, { rgb: [0.02, 0.01, 0.00] });
+  const dRed  = n('color', -480, -440, { rgb: [0.45, 0.06, 0.02] });
+  const orng  = n('color', -480, -600, { rgb: [0.95, 0.45, 0.10] });
+  const ylw   = n('color', -480, -760, { rgb: [1.00, 0.95, 0.35] });
+
+  // base: black → dark red by the marble pattern
+  const mix1 = n('mix', -120, -80);
+  // add orange in the veins (hot cracks)
+  const mix2 = n('mix',  200,  40);
+  // highlight brightest specks with yellow, gated by pattern^5
+  const hot  = n('pow',  200,  260);
+  const hotE = n('float', 20,  320, { value: 5.0 });
+  const mix3 = n('mix',  520,  120);
+
+  const uvIn = n('uv',   520, 280);
+  const vig  = n('vignette', 820, 160, { strength: 1.20 });
+  const out  = n('output', 1120, 160);
+
+  c(cuv,  'p',       marb,  'p');
+  c(time, 'out',     marb,  'time');
+  c(cuv,  'p',       veins, 'p');
+  c(time, 'out',     veins, 'time');
+
+  c(black, 'out',    mix1, 'a');
+  c(dRed,  'out',    mix1, 'b');
+  c(marb,  'pattern',mix1, 't');
+
+  c(mix1,  'out',    mix2, 'a');
+  c(orng,  'out',    mix2, 'b');
+  c(veins, 'out',    mix2, 't');
+
+  c(marb, 'pattern', hot, 'x');
+  c(hotE, 'out',     hot, 'e');
+
+  c(mix2, 'out',     mix3, 'a');
+  c(ylw,  'out',     mix3, 'b');
+  c(hot,  'out',     mix3, 't');
+
+  c(mix3, 'out',  vig, 'color');
+  c(uvIn, 'out',  vig, 'uv');
+  c(vig,  'out',  out, 'color');
+}
+
+/* ---- Plasma Wave — classic demoscene interfering sin/cos plasma ---- */
+function tplPlasmaWave(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const uv    = n('uv',        -920,  40);
+  const split = n('splitVec2', -640,  40);
+
+  // two time streams at different speeds — gives the cross-rhythm
+  const timeA = n('time', -920, 240, { scale: 1.0 });
+  const timeB = n('time', -920, 380, { scale: 1.3 });
+
+  // Wave A: sin(x * 6 + timeA)
+  const fx    = n('float',    -640, -120, { value: 6.0 });
+  const xMul  = n('multiply', -400,  -40);
+  const phA   = n('add',      -160,  -40);
+  const waveA = n('sin',        80,  -40);
+
+  // Wave B: cos(y * 5 + timeB)
+  const fy    = n('float',    -640, 520, { value: 5.0 });
+  const yMul  = n('multiply', -400, 200);
+  const phB   = n('add',      -160, 200);
+  const waveB = n('cos',        80, 200);
+
+  // combine A + B → range -2..2, then normalize to 0..1
+  const sum   = n('add',       320,  80);
+  const halfS = n('float',    -160, 360, { value: 0.25 });
+  const scl   = n('multiply',  560,  80);
+  const biasV = n('float',     320, 200, { value: 0.5 });
+  const t01   = n('add',       800,  80);
+
+  // two contrasting colors that read as "sunset plasma"
+  const hot   = n('color', 560,  -240, { rgb: [1.00, 0.45, 0.20] });
+  const cold  = n('color', 560,  -120, { rgb: [0.45, 0.20, 0.85] });
+  const mix01 = n('mix',   1060,   40);
+
+  const out   = n('output', 1360,   40);
+
+  c(uv,    'out', split, 'v');
+
+  // x wave
+  c(split, 'x',   xMul, 'a');
+  c(fx,    'out', xMul, 'b');
+  c(xMul,  'out', phA,  'a');
+  c(timeA, 'out', phA,  'b');
+  c(phA,   'out', waveA,'x');
+
+  // y wave
+  c(split, 'y',   yMul, 'a');
+  c(fy,    'out', yMul, 'b');
+  c(yMul,  'out', phB,  'a');
+  c(timeB, 'out', phB,  'b');
+  c(phB,   'out', waveB,'x');
+
+  // combined → t in 0..1
+  c(waveA, 'out', sum,  'a');
+  c(waveB, 'out', sum,  'b');
+  c(sum,   'out', scl,  'a');
+  c(halfS, 'out', scl,  'b');
+  c(scl,   'out', t01,  'a');
+  c(biasV, 'out', t01,  'b');
+
+  c(cold, 'out', mix01, 'a');
+  c(hot,  'out', mix01, 'b');
+  c(t01,  'out', mix01, 't');
+
+  c(mix01, 'out', out, 'color');
+}
+
+/* ---- Neon Rings — radial pulse with sharp smoothstep edges ---- */
+function tplNeonRings(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv   = n('centeredUV', -760, 40);
+  // fast time gives the rings a tight propagation speed
+  const time  = n('time', -760, 240, { scale: 3.0 });
+
+  const k     = n('float', -760, -200, { value: 22.0 });
+  const dMul  = n('multiply', -440, 20);      // dist * 22
+  const phase = n('subtract', -160, 40);      // dMul - time
+  const wave  = n('sin',         80, 40);
+  const posW  = n('abs',        320, 40);     // sharp bands via |sin|
+
+  // sharp band edges via smoothstep — ring width controlled by the range
+  const s0    = n('float', 80,  220, { value: 0.85 });
+  const s1    = n('float', 80,  340, { value: 1.00 });
+  const ring  = n('smoothstep', 560, 80);
+
+  const bg    = n('color', 560, -180, { rgb: [0.02, 0.02, 0.10] });
+  const neon  = n('color', 560, -320, { rgb: [0.35, 0.95, 1.00] });
+  const mix1  = n('mix',   880,  -40);
+
+  const out   = n('output', 1180, -40);
+
+  c(cuv,  'dist', dMul, 'a');
+  c(k,    'out',  dMul, 'b');
+  c(dMul, 'out',  phase,'a');
+  c(time, 'out',  phase,'b');
+  c(phase,'out',  wave, 'x');
+  c(wave, 'out',  posW, 'x');
+
+  c(s0,   'out',  ring, 'a');
+  c(s1,   'out',  ring, 'b');
+  c(posW, 'out',  ring, 'x');
+
+  c(bg,   'out',  mix1, 'a');
+  c(neon, 'out',  mix1, 'b');
+  c(ring, 'out',  mix1, 't');
+
+  c(mix1, 'out',  out, 'color');
+}
+
+/* ---- Static Grain — per-pixel animated random (Random-node showcase) ---- */
+function tplStaticGrain(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const uv    = n('uv',     -640, 40);
+  // fast-scaled time so the grain churns briskly
+  const time  = n('time',   -640, 220, { scale: 6.0 });
+
+  // spatial seed: scale UV way up so every pixel hashes differently
+  const sc    = n('float',    -640, -140, { value: 73.0 });
+  const uvBig = n('scaleVec2',-360,  60);
+
+  // the star: Random fed by both the scaled UV (per-pixel) AND time (per-frame)
+  const rnd   = n('random',  -80, 40, { mode: 'decimal', precision: 2 });
+
+  const gray  = n('grayscale', 260, 40);
+  const out   = n('output',    560, 40);
+
+  c(uv,   'out', uvBig, 'v');
+  c(sc,   'out', uvBig, 's');
+
+  c(uvBig, 'out', rnd, 'seedUV');
+  c(time,  'out', rnd, 'seed');
+  // rnd.min and rnd.max stay at default (0 and 1), editable as inline values
+
+  c(rnd,  'out', gray, 'x');
+  c(gray, 'out', out, 'color');
+}
+
 /* ---------------- Registry (order = display order in the picker) ---------------- */
+/* Template registry. `category` groups items into collapsible sections in the
+   picker UI: 'demo' is the tutorial/feature-walkthrough set, 'showcase' is the
+   fun/wild creative-use set. Default is 'demo' if omitted. */
 const SHADER_TEMPLATES = [
-  { id: 'marbleGold',      name: 'Marble Gold',      desc: 'Warped FBM marble with gold veins — the dossier preset.',        load: tplMarbleGold },
-  { id: 'marbleOnyx',      name: 'Marble Onyx',      desc: 'Same warped marble, gold splotches removed — dark stone only.',  load: tplMarbleOnyx },
-  { id: 'channelMixer',    name: 'Channel Mixer',    desc: 'Split + Combine + inline value — swaps UV channels.',            load: tplChannelMixer },
-  { id: 'blendDemo',       name: 'Blend Demo',       desc: 'Two gradients combined via the Blend node — try other modes.',   load: tplBlendDemo },
-  { id: 'heightField',     name: 'Height Field',     desc: 'FBM heightmap visualized as grayscale + vignette.',              load: tplHeightField },
-  { id: 'normalPreview',   name: 'Normal Preview',   desc: 'Normal map encoded as RGB (the classic blue-ish look).',         load: tplNormalPreview },
-  { id: 'terrainRelief',   name: 'Terrain Relief',   desc: 'Height + normal composited for shaded-terrain look.',            load: tplTerrainRelief },
-  { id: 'litHeightfield',  name: 'Lit Heightfield',  desc: 'Height Map → elevation tint, Normal Map → overhead-light shade.', load: tplLitHeightfield },
-  { id: 'brickWall',       name: 'Brick Wall',       desc: 'Static diffuse + normal map from assets/textures/brick-wall/.',   load: tplBrickWall },
-  { id: 'brickWallSpec',   name: 'Brick Wall + Spec', desc: 'Adds the spec map — screen-blended highlights on brick faces.',  load: tplBrickWallSpec },
-  { id: 'radialPulse',     name: 'Radial Pulse',     desc: 'Animated radial gradient driven by time-wobbled dist.',          load: tplRadialPulse },
+  // ---- Demos: illustrate specific features ----
+  { id: 'marbleGold',      name: 'Marble Gold',      category:'demo',
+    desc: 'Warped FBM marble with gold veins — the dossier preset.',        load: tplMarbleGold },
+  { id: 'marbleOnyx',      name: 'Marble Onyx',      category:'demo',
+    desc: 'Same warped marble, gold splotches removed — dark stone only.',  load: tplMarbleOnyx },
+  { id: 'channelMixer',    name: 'Channel Mixer',    category:'demo',
+    desc: 'Split + Combine + inline value — swaps UV channels.',            load: tplChannelMixer },
+  { id: 'blendDemo',       name: 'Blend Demo',       category:'demo',
+    desc: 'Two gradients combined via the Blend node — try other modes.',   load: tplBlendDemo },
+  { id: 'heightField',     name: 'Height Field',     category:'demo',
+    desc: 'FBM heightmap visualized as grayscale + vignette.',              load: tplHeightField },
+  { id: 'normalPreview',   name: 'Normal Preview',   category:'demo',
+    desc: 'Normal map encoded as RGB (the classic blue-ish look).',         load: tplNormalPreview },
+  { id: 'terrainRelief',   name: 'Terrain Relief',   category:'demo',
+    desc: 'Height + normal composited for shaded-terrain look.',            load: tplTerrainRelief },
+  { id: 'litHeightfield',  name: 'Lit Heightfield',  category:'demo',
+    desc: 'Height Map → elevation tint, Normal Map → overhead-light shade.', load: tplLitHeightfield },
+  { id: 'brickWall',       name: 'Brick Wall',       category:'demo',
+    desc: 'Static diffuse + normal map from assets/textures/brick-wall/.',   load: tplBrickWall },
+  { id: 'brickWallSpec',   name: 'Brick Wall + Spec', category:'demo',
+    desc: 'Adds the spec map — screen-blended highlights on brick faces.',  load: tplBrickWallSpec },
+  { id: 'radialPulse',     name: 'Radial Pulse',     category:'demo',
+    desc: 'Animated radial gradient driven by time-wobbled dist.',          load: tplRadialPulse },
+
+  // ---- Showcase: creative/standalone visuals ----
+  { id: 'aurora',          name: 'Aurora',           category:'showcase',
+    desc: 'Flowing curtains of cold green and deep purple — FBM-warped.',   load: tplAurora },
+  { id: 'lavaFlow',        name: 'Lava Flow',        category:'showcase',
+    desc: 'Warped marble in molten reds, orange veins, hot-spot highlights.', load: tplLavaFlow },
+  { id: 'plasmaWave',      name: 'Plasma Wave',      category:'showcase',
+    desc: 'Classic demoscene plasma — interfering sin & cos waves in UV.',  load: tplPlasmaWave },
+  { id: 'neonRings',       name: 'Neon Rings',       category:'showcase',
+    desc: 'Radial sin pulses + sharp smoothstep edges = cyberpunk neon.',   load: tplNeonRings },
+  { id: 'staticGrain',     name: 'Static Grain',     category:'showcase',
+    desc: 'Animated per-pixel random — showcases the Random node (with Time seed).', load: tplStaticGrain },
 ];

@@ -370,6 +370,54 @@ templatesSearch.addEventListener('keydown', (e) => {
   }
 });
 
+// Display order + human-readable label for each category. Items whose
+// category isn't in this list fall into "demo" by default.
+const TEMPLATE_CATEGORIES = [
+  { id: 'showcase', label: 'Showcase' },
+  { id: 'demo',     label: 'Demos'    },
+];
+
+function buildTemplateItem(t){
+  const item = document.createElement('div');
+  item.className = 'shader-list-item';
+
+  const main = document.createElement('div');
+  main.className = 'sli-main';
+  const title = document.createElement('div');
+  title.className = 'sli-name';
+  title.textContent = t.name;
+  const meta = document.createElement('div');
+  meta.className = 'sli-meta';
+  meta.textContent = t.desc || '';
+  main.appendChild(title);
+  main.appendChild(meta);
+  item.appendChild(main);
+
+  item.addEventListener('click', () => {
+    try {
+      t.load();
+      currentShaderName = '';
+      // templates that use Texture / static Height/Normal nodes stash a
+      // URL in node.params.imageUrl — kick off the actual image loads
+      // here so the template author doesn't have to remember to do it.
+      for (const n of state.nodes){
+        const url = n.params && n.params.imageUrl;
+        if (url) loadImageForNode(n.id, url);
+      }
+      renderAll();
+      recenterView();
+      recompileShader();
+      closeTemplatesModal();
+      closeLoadModal();
+      toast(`loaded "${t.name}"`);
+    } catch (err){
+      toast(err.message || 'template failed', 'err');
+      console.error(err);
+    }
+  });
+  return item;
+}
+
 function renderTemplatesList(q){
   const query = q.trim().toLowerCase();
   const matches = !query ? SHADER_TEMPLATES : SHADER_TEMPLATES.filter(t =>
@@ -388,49 +436,57 @@ function renderTemplatesList(q){
     return;
   }
 
-  const list = document.createElement('div');
-  list.className = 'shader-list';
+  // group matches by category so each gets its own collapsible section.
+  const grouped = new Map();   // categoryId → [template,…]
   for (const t of matches){
-    const item = document.createElement('div');
-    item.className = 'shader-list-item';
-
-    const main = document.createElement('div');
-    main.className = 'sli-main';
-    const title = document.createElement('div');
-    title.className = 'sli-name';
-    title.textContent = t.name;
-    const meta = document.createElement('div');
-    meta.className = 'sli-meta';
-    meta.textContent = t.desc || '';
-    main.appendChild(title);
-    main.appendChild(meta);
-    item.appendChild(main);
-
-    item.addEventListener('click', () => {
-      try {
-        t.load();                   // mutates state directly
-        currentShaderName = '';      // template load = fresh, unnamed graph
-        // templates that use Texture / static Height/Normal nodes stash a
-        // URL in node.params.imageUrl — kick off the actual image loads
-        // here so the template author doesn't have to remember to do it.
-        for (const n of state.nodes){
-          const url = n.params && n.params.imageUrl;
-          if (url) loadImageForNode(n.id, url);
-        }
-        renderAll();
-        recenterView();
-        recompileShader();
-        closeTemplatesModal();
-        closeLoadModal();           // also close the load modal if it was the entry point
-        toast(`loaded "${t.name}"`);
-      } catch (err){
-        toast(err.message || 'template failed', 'err');
-        console.error(err);
-      }
-    });
-    list.appendChild(item);
+    const cat = t.category || 'demo';
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat).push(t);
   }
-  templatesList.appendChild(list);
+
+  for (const { id: catId, label } of TEMPLATE_CATEGORIES){
+    const items = grouped.get(catId);
+    if (!items || !items.length) continue;
+
+    // <details>/<summary> gives native open/closed state + keyboard a11y
+    // for free. Both groups start expanded; user can collapse with a click.
+    const details = document.createElement('details');
+    details.className = 'tpl-cat';
+    details.open = true;
+
+    const summary = document.createElement('summary');
+    summary.className = 'tpl-cat-header';
+    summary.innerHTML = `<span class="tpl-cat-label">${escapeHTML(label)}</span>` +
+                       `<span class="tpl-cat-count">${items.length}</span>`;
+    details.appendChild(summary);
+
+    const list = document.createElement('div');
+    list.className = 'shader-list';
+    for (const t of items) list.appendChild(buildTemplateItem(t));
+    details.appendChild(list);
+
+    templatesList.appendChild(details);
+  }
+
+  // Any uncategorized (or unknown-category) matches — show them in a trailing
+  // "Other" section so they don't disappear if someone mistypes a category.
+  const knownIds = new Set(TEMPLATE_CATEGORIES.map(c => c.id));
+  const leftovers = matches.filter(t => !knownIds.has(t.category || 'demo'));
+  if (leftovers.length){
+    const details = document.createElement('details');
+    details.className = 'tpl-cat';
+    details.open = true;
+    const summary = document.createElement('summary');
+    summary.className = 'tpl-cat-header';
+    summary.innerHTML = `<span class="tpl-cat-label">Other</span>` +
+                       `<span class="tpl-cat-count">${leftovers.length}</span>`;
+    details.appendChild(summary);
+    const list = document.createElement('div');
+    list.className = 'shader-list';
+    for (const t of leftovers) list.appendChild(buildTemplateItem(t));
+    details.appendChild(list);
+    templatesList.appendChild(details);
+  }
 }
 
 $('#loadFromFileBtn').addEventListener('click', () => {

@@ -101,9 +101,16 @@ float heightField(vec2 p, float scale, float time){
 const NODE_TYPES = {
   /* ---- inputs ---- */
   time: {
-    category:'Input', title:'Time', desc:'u_time uniform (seconds)',
+    category:'Input', title:'Time', desc:'u_time uniform (seconds) × scale',
     inputs:[], outputs:[{name:'out', type:'float'}],
-    generate:() => ({ exprs:{ out:'u_time' } }),
+    params:[{name:'scale', kind:'number', default:1.0, step:0.01}],
+    // when scale==1 we emit the bare `u_time` identifier so downstream nodes
+    // reference the uniform directly (no temp var needed). any other value
+    // produces `(u_time * s)` — still cheap, still inlined where possible.
+    generate:(ctx) => {
+      const s = ctx.params.scale;
+      return { exprs:{ out: s === 1 ? 'u_time' : `(u_time * ${glslNum(s)})` } };
+    },
   },
   uv: {
     category:'Input', title:'UV', desc:'0..1 coords across the quad',
@@ -248,6 +255,53 @@ const NODE_TYPES = {
     inputs:[{name:'v', type:'vec2', default:[0,0]}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`length(${ctx.inputs.v})` } }),
+  },
+  /* Random — pseudo-random float from any combination of seeds.
+     Provides THREE optional seed inputs (float / vec2 / vec3) so you can
+     plug in whatever's natural: `time` for per-frame randoms, `uv` for
+     per-pixel, both for per-pixel-and-animated, etc. All three are mixed
+     into one scalar via a dot-product hash before the final sin-based
+     hash — unused seeds sit at zero and contribute nothing.
+     Output is clamped to [min, max]. `mode` picks integer vs decimal;
+     decimal mode uses `precision` to quantize to N places after the dot. */
+  random: {
+    category:'Math', title:'Random', desc:'pseudo-random float in [min, max]',
+    inputs:[
+      {name:'seed',     type:'float', default:0},
+      {name:'seedUV',   type:'vec2',  default:[0,0]},
+      {name:'seedVec3', type:'vec3',  default:[0,0,0]},
+      {name:'min',      type:'float', default:0},
+      {name:'max',      type:'float', default:1},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    params:[
+      {name:'mode',      kind:'segmented', default:'decimal', options:['decimal','integer']},
+      {name:'precision', kind:'number',    default:2, min:0, max:6, step:1,
+       visibleWhen:p => p.mode === 'decimal'},
+    ],
+    generate:(ctx) => {
+      const seedF  = ctx.tmp('rseed');
+      const rand   = ctx.tmp('rrand');
+      const scaled = ctx.tmp('rscl');
+      const setup =
+`float ${seedF} = ${ctx.inputs.seed}
+             + dot(${ctx.inputs.seedUV},   vec2(12.9898, 78.233))
+             + dot(${ctx.inputs.seedVec3}, vec3(53.3171, 7.0, 13.11));
+float ${rand}   = fract(sin(${seedF}) * 43758.5453123);
+float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
+
+      let out;
+      if (ctx.params.mode === 'integer'){
+        out = `floor(${scaled} + 0.5)`;
+      } else {
+        const p   = Math.max(0, Math.min(6, Math.round(ctx.params.precision || 0)));
+        const mul = glslNum(Math.pow(10, p));
+        out = p === 0
+          ? `floor(${scaled} + 0.5)`
+          : `floor(${scaled} * ${mul} + 0.5) / ${mul}`;
+      }
+      return { setup, exprs:{ out } };
+    },
   },
 
   makeVec2: {

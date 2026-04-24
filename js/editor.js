@@ -553,43 +553,43 @@ function attachSocketHandlers(nodeEl){
   }
 }
 
-/* Click-drag entry point. If the clicked socket is already connected, we
-   pick up the most recent wire (detach it from state) and begin dragging
-   from the OPPOSITE end — so drop-on-empty deletes the wire, and drop-on-
-   compatible-socket rewires it. Fresh sockets just start a new wire. */
+/* Click-drag entry point. Direction-specific behavior:
+   - INPUT already connected → pick up the existing wire (detach) and drag
+     from the upstream output. Drop-on-empty deletes, drop-on-compatible
+     input rewires. An input can only have one upstream, so "click the
+     existing wire" is unambiguous.
+   - OUTPUT (connected or not) → ALWAYS start a new wire. Outputs fan out
+     to any number of downstream inputs, so clicking a connected output
+     should never disconnect its existing consumers — the user is adding
+     another consumer. To delete a specific wire, right-click it (context
+     menu → Delete connection) or alt+click the wire.
+   - INPUT not connected → start a new wire. */
 function startWire(sockEl){
   const isInput = sockEl.dataset.dir === 'in';
   const nodeId  = sockEl.dataset.nodeId;
   const socket  = sockEl.dataset.socket;
 
-  const existing = state.connections.filter(c =>
-    isInput
-      ? (c.to.nodeId   === nodeId && c.to.socket   === socket)
-      : (c.from.nodeId === nodeId && c.from.socket === socket)
-  );
+  if (isInput){
+    const existing = state.connections.filter(c =>
+      c.to.nodeId === nodeId && c.to.socket === socket
+    );
+    if (existing.length > 0){
+      const conn = existing[existing.length - 1];
+      state.connections = state.connections.filter(c => c.id !== conn.id);
 
-  if (existing.length > 0){
-    // pick up the most-recently-added wire — for single-connection inputs
-    // that's the only one; for multi-connection outputs it's the newest.
-    const conn = existing[existing.length - 1];
-    state.connections = state.connections.filter(c => c.id !== conn.id);
+      renderAll();
+      scheduleRecompile();
 
-    // the "anchor" is the OTHER endpoint of the detached wire; we begin
-    // dragging from there so the user can rewire the free end or drop on
-    // empty space to finalize the disconnection.
-    const anchorEnd = isInput ? conn.from : conn.to;
-    const anchorDir = isInput ? 'out'     : 'in';
-
-    renderAll();
-    scheduleRecompile();
-
-    const anchorSockEl = socketElement(anchorEnd.nodeId, anchorDir, anchorEnd.socket);
-    if (anchorSockEl){
-      startWireDragFrom(anchorSockEl);
+      const anchorSockEl = socketElement(conn.from.nodeId, 'out', conn.from.socket);
+      if (anchorSockEl){
+        startWireDragFrom(anchorSockEl);
+      }
+      return;
     }
-    return;
   }
 
+  // fresh wire — either an unconnected input, or any output (outputs never
+  // detach on drag; they fan out to additional inputs)
   startWireDragFrom(sockEl);
 }
 
