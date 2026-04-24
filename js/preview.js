@@ -263,16 +263,13 @@ const PREVIEW = (() => {
     const padY = r.height * 0.6;
     const nx = Math.max(-1, Math.min(1, (e.clientX - cx) / (r.width  / 2 + padX)));
     const ny = Math.max(-1, Math.min(1, (e.clientY - cy) / (r.height / 2 + padY)));
-    // Symmetric "lean AWAY from cursor" tilt on both axes. The X axis was
-    // already `-nx` in the dossier original, but the Y axis used `+ny`,
-    // which made the card lean TOWARD the cursor vertically — that put the
-    // receding (and therefore face-shade-darkened) side OPPOSITE the cursor,
-    // so the cursor-side appeared bright and the lighting read as co-
-    // directional on Y while correctly diametric on X. Matching the X sign
-    // makes cursor-TOP → TOP recedes → TOP shaded → BOTTOM bright, which is
-    // the diametric behavior the sheen/rim already follow.
+    // Restored to the dossier original: X leans AWAY, Y leans TOWARD the
+    // cursor. The card's natural-feeling "toward cursor on Y" tilt is what
+    // gives the avatar and text their expected parallax pop-out. The Y
+    // lighting asymmetry is fixed below by flipping the Y face-shade
+    // formulas (see applyLighting), not by inverting the tilt.
     targetRy = -nx * MAX_TILT;
-    targetRx = -ny * MAX_TILT;
+    targetRx =  ny * MAX_TILT;
     mouseNX  = nx;
     mouseNY  = ny;
     hovering = true;
@@ -323,8 +320,18 @@ const PREVIEW = (() => {
 
     // receding-side face shade — darkens whichever edge is tilted away
     const K = 0.55;
-    setVar('--shade-top-a',   (Math.max(0,  curRx / MAX_TILT) * K).toFixed(3));
-    setVar('--shade-bot-a',   (Math.max(0, -curRx / MAX_TILT) * K).toFixed(3));
+    // Y shade is intentionally inverted relative to the dossier original.
+    // The dossier had both shade axes darken the RECEDING side (physical
+    // depth cue). But combined with the card's "lean TOWARD cursor on Y"
+    // tilt, that made the cursor side brighter → co-directional Y lighting.
+    // Flipping Y's sign here darkens the SIDE TOWARD the cursor, which is
+    // consistent with a "virtual light source opposite the cursor" model —
+    // the near (cursor-side) surface is actually farther from that virtual
+    // light, so reads darker. X keeps the original sign because its tilt
+    // already leans AWAY from the cursor, and the physical convention
+    // happens to produce the desired diametric result there.
+    setVar('--shade-top-a',   (Math.max(0, -curRx / MAX_TILT) * K).toFixed(3));
+    setVar('--shade-bot-a',   (Math.max(0,  curRx / MAX_TILT) * K).toFixed(3));
     setVar('--shade-left-a',  (Math.max(0,  curRy / MAX_TILT) * K).toFixed(3));
     setVar('--shade-right-a', (Math.max(0, -curRy / MAX_TILT) * K).toFixed(3));
 
