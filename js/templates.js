@@ -579,14 +579,27 @@ function tplPlasmaWave(){
   const timeA = n('time', -920, 240, { scale: 1.0 });
   const timeB = n('time', -920, 380, { scale: 1.3 });
 
-  // Wave A: sin(x * 6 + timeA)
-  const fx    = n('float',    -640, -120, { value: 6.0 });
+  // RANDOM-DRIVEN FREQUENCIES. Two slow time streams seed two Random nodes
+  // quantized to 0.1 steps in the [4, 8] range, replacing what used to be
+  // Float constants of 6 and 5. Because Random rehashes every frame, the
+  // base frequencies jitter between values like 5.3 / 6.7 / 4.9 … which
+  // gives the whole plasma a "random motion" that the plain sin+cos setup
+  // never had.
+  const timeRandA = n('time', -920, 520, { scale: 0.35 });
+  const timeRandB = n('time', -920, 660, { scale: 0.47 });
+  const rFreqX    = n('random', -640, -120,
+    { mode: 'decimal', precision: 1 },
+    { min: 4, max: 8 });
+  const rFreqY    = n('random', -640,  520,
+    { mode: 'decimal', precision: 1 },
+    { min: 3, max: 7 });
+
+  // Wave A: sin(x * rFreqX + timeA)
   const xMul  = n('multiply', -400,  -40);
   const phA   = n('add',      -160,  -40);
   const waveA = n('sin',        80,  -40);
 
-  // Wave B: cos(y * 5 + timeB)
-  const fy    = n('float',    -640, 520, { value: 5.0 });
+  // Wave B: cos(y * rFreqY + timeB)
   const yMul  = n('multiply', -400, 200);
   const phB   = n('add',      -160, 200);
   const waveB = n('cos',        80, 200);
@@ -607,19 +620,23 @@ function tplPlasmaWave(){
 
   c(uv,    'out', split, 'v');
 
-  // x wave
-  c(split, 'x',   xMul, 'a');
-  c(fx,    'out', xMul, 'b');
-  c(xMul,  'out', phA,  'a');
-  c(timeA, 'out', phA,  'b');
-  c(phA,   'out', waveA,'x');
+  // seed the two frequency randoms from independent slow-time sources
+  c(timeRandA, 'out', rFreqX, 'seed');
+  c(timeRandB, 'out', rFreqY, 'seed');
 
-  // y wave
-  c(split, 'y',   yMul, 'a');
-  c(fy,    'out', yMul, 'b');
-  c(yMul,  'out', phB,  'a');
-  c(timeB, 'out', phB,  'b');
-  c(phB,   'out', waveB,'x');
+  // x wave — rFreqX replaces the old constant 6.0
+  c(split,  'x',   xMul, 'a');
+  c(rFreqX, 'out', xMul, 'b');
+  c(xMul,   'out', phA,  'a');
+  c(timeA,  'out', phA,  'b');
+  c(phA,    'out', waveA,'x');
+
+  // y wave — rFreqY replaces the old constant 5.0
+  c(split,  'y',   yMul, 'a');
+  c(rFreqY, 'out', yMul, 'b');
+  c(yMul,   'out', phB,  'a');
+  c(timeB,  'out', phB,  'b');
+  c(phB,    'out', waveB,'x');
 
   // combined → t in 0..1
   c(waveA, 'out', sum,  'a');
@@ -685,29 +702,48 @@ function tplStaticGrain(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const uv    = n('uv',     -640, 40);
-  // fast-scaled time so the grain churns briskly
-  const time  = n('time',   -640, 220, { scale: 6.0 });
-
+  const uv    = n('uv',     -820, 40);
   // spatial seed: scale UV way up so every pixel hashes differently
-  const sc    = n('float',    -640, -140, { value: 73.0 });
-  const uvBig = n('scaleVec2',-360,  60);
+  const sc    = n('float',    -820, -140, { value: 73.0 });
+  const uvBig = n('scaleVec2',-560,  60);
 
-  // the star: Random fed by both the scaled UV (per-pixel) AND time (per-frame)
-  const rnd   = n('random',  -80, 40, { mode: 'decimal', precision: 2 });
+  // Three time streams at different scales so R / G / B each decorrelate
+  // in time — without this, all three channels would flicker together
+  // and the output would look grayscale despite having three randoms.
+  const timeR = n('time',   -820, 260, { scale: 6.0 });
+  const timeG = n('time',   -820, 380, { scale: 7.3 });
+  const timeB = n('time',   -820, 500, { scale: 5.7 });
 
-  const gray  = n('grayscale', 260, 40);
-  const out   = n('output',    560, 40);
+  // One Random per channel. All three share the same spatial seed (uvBig
+  // fans out — only possible since the output-fan-out fix), so each pixel
+  // keeps its own identity. Their time seeds differ so the three channels
+  // fluctuate independently, producing the saturated RGB TV-static look.
+  const rR    = n('random', -220, -140, { mode: 'decimal', precision: 2 });
+  const rG    = n('random', -220,   60, { mode: 'decimal', precision: 2 });
+  const rB    = n('random', -220,  260, { mode: 'decimal', precision: 2 });
 
-  c(uv,   'out', uvBig, 'v');
-  c(sc,   'out', uvBig, 's');
+  const comb  = n('combine',  160,  60);
+  const out   = n('output',   500,  60);
 
-  c(uvBig, 'out', rnd, 'seedUV');
-  c(time,  'out', rnd, 'seed');
-  // rnd.min and rnd.max stay at default (0 and 1), editable as inline values
+  c(uv, 'out', uvBig, 'v');
+  c(sc, 'out', uvBig, 's');
 
-  c(rnd,  'out', gray, 'x');
-  c(gray, 'out', out, 'color');
+  // fan-out: the same scaled UV seeds all three channel randoms
+  c(uvBig, 'out', rR, 'seedUV');
+  c(uvBig, 'out', rG, 'seedUV');
+  c(uvBig, 'out', rB, 'seedUV');
+
+  // per-channel time so each color flickers independently
+  c(timeR, 'out', rR, 'seed');
+  c(timeG, 'out', rG, 'seed');
+  c(timeB, 'out', rB, 'seed');
+
+  // pack the three random floats into a vec3 color
+  c(rR, 'out', comb, 'x');
+  c(rG, 'out', comb, 'y');
+  c(rB, 'out', comb, 'z');
+
+  c(comb, 'xyz', out, 'color');
 }
 
 /* ---------------- Registry (order = display order in the picker) ---------------- */

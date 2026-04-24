@@ -81,6 +81,18 @@ float marblePattern(vec2 p2, float time, float scale){
 float heightField(vec2 p, float scale, float time){
   return fbm(vec3(p * scale, time * 0.12), 6.0) * 0.5 + 0.5;
 }`,
+  rngHash3: `
+/* High-quality 3D→1D hash used by the Random node. Replaces the classic
+   one-liner \`fract(sin(x) * 43758.54)\` hash, which produces visible
+   diagonal banding when seeded with linearly-spaced inputs (e.g. time
+   combined with scaled UV via dot products) — sin's periodicity shows up
+   as slow-moving lines across the screen. This iq-style hash mixes all
+   three components via fract + dot and has no visible artifacts.  */
+float rngHash3(vec3 p){
+  p = fract(p * vec3(443.8975, 397.2973, 491.1871));
+  p += dot(p, p.zyx + 19.19);
+  return fract((p.x + p.y) * p.z);
+}`,
 };
 
 /* ---------------- node type registry ----------------
@@ -279,15 +291,18 @@ const NODE_TYPES = {
       {name:'precision', kind:'number',    default:2, min:0, max:6, step:1,
        visibleWhen:p => p.mode === 'decimal'},
     ],
+    helpers:['rngHash3'],
     generate:(ctx) => {
-      const seedF  = ctx.tmp('rseed');
+      // Pack the three seed inputs into a single vec3 so rngHash3 can mix
+      // them properly. The prior dot-product-then-sin construction reduced
+      // everything to a scalar and produced visible banding — packing as
+      // vec3 lets each hash axis see an independent dimension.
+      const seedV  = ctx.tmp('rseedv');
       const rand   = ctx.tmp('rrand');
       const scaled = ctx.tmp('rscl');
       const setup =
-`float ${seedF} = ${ctx.inputs.seed}
-             + dot(${ctx.inputs.seedUV},   vec2(12.9898, 78.233))
-             + dot(${ctx.inputs.seedVec3}, vec3(53.3171, 7.0, 13.11));
-float ${rand}   = fract(sin(${seedF}) * 43758.5453123);
+`vec3 ${seedV}  = ${ctx.inputs.seedVec3} + vec3(${ctx.inputs.seedUV}, ${ctx.inputs.seed});
+float ${rand}   = rngHash3(${seedV});
 float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
 
       let out;
