@@ -4,7 +4,10 @@
    toBlob returns (and you get a blank image). */
 const renderer = (() => {
   const canvas = $('#bgShader');
-  const opts = { preserveDrawingBuffer: true, antialias: true };
+  // alpha:false → canvas is composited opaque. The output shader now writes
+  // gl_FragColor.a = specular as a bloom mask, and we don't want that alpha
+  // to leak into the page when we draw direct-to-screen.
+  const opts = { preserveDrawingBuffer: true, antialias: true, alpha: false };
   const gl = canvas.getContext('webgl', opts) || canvas.getContext('experimental-webgl', opts);
   if (!gl){
     toast('WebGL unavailable', 'err');

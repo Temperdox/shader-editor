@@ -1436,8 +1436,16 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
 
   /* ---- terminal ---- */
   output: {
-    category:'Output', title:'Fragment Output', desc:'gl_FragColor + optional real bloom',
-    inputs:[{name:'color', type:'vec3', default:[0,0,0]}],
+    category:'Output', title:'Fragment Output', desc:'gl_FragColor + specular-driven bloom',
+    // `specular` is a per-pixel reflectivity mask (0 = matte, 1 = mirror).
+    // The renderer writes it into the scene FBO's alpha channel, and the
+    // bloom pass uses it to decide which pixels glow — so a Fresnel / spec
+    // map can light up only the shiny parts instead of everything bright.
+    // Default 1.0 when unconnected preserves the old luminance-only behavior.
+    inputs:[
+      {name:'color',    type:'vec3',  default:[0, 0, 0]},
+      {name:'specular', type:'float', default:1.0},
+    ],
     outputs:[],
     // Bloom params are consumed by the renderer (not by `generate`). When
     // `bloom` is 'on' the renderer switches to a multi-pass pipeline:
@@ -1453,7 +1461,8 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
        visibleWhen:p => p.bloom === 'on'},
     ],
     generate:(ctx) => ({
-      setup:`gl_FragColor = vec4(clamp(${ctx.inputs.color}, 0.0, 1.0), 1.0);`,
+      // .rgb = final color, .a = specular mask. The bloom pass reads alpha.
+      setup:`gl_FragColor = vec4(clamp(${ctx.inputs.color}, 0.0, 1.0), clamp(${ctx.inputs.specular}, 0.0, 1.0));`,
       exprs:{},
     }),
   },

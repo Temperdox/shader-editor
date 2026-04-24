@@ -117,8 +117,10 @@ const PREVIEW = (() => {
      just recompile the program against the updated graph source. */
   function ensureGL(){
     if (gl) return true;
-    gl = faceCanvas.getContext('webgl',              { antialias: true, preserveDrawingBuffer: false })
-      || faceCanvas.getContext('experimental-webgl', { antialias: true, preserveDrawingBuffer: false });
+    // alpha:false — output shader writes specular into gl_FragColor.a, which
+    // we don't want leaking into the page composite. Matches renderer.js.
+    gl = faceCanvas.getContext('webgl',              { antialias: true, preserveDrawingBuffer: false, alpha: false })
+      || faceCanvas.getContext('experimental-webgl', { antialias: true, preserveDrawingBuffer: false, alpha: false });
     if (!gl){
       toast('WebGL unavailable for preview', 'err');
       return false;

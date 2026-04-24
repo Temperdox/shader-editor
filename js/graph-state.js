@@ -49,14 +49,40 @@ function _applyGraph(snap){
 }
 function pushHistory(){
   if (history.suspended) return;
+  const snap = _cloneGraph();
+  // Dedupe: if the new snapshot matches the current top, skip. Avoids
+  // "invisible" undos (press Ctrl+Z, nothing seems to happen) caused by
+  // mutation paths that end up leaving state identical to the previous
+  // snapshot — e.g. a click-without-drag firing the drag onUp handler.
+  if (history.index >= 0){
+    const prev = history.stack[history.index];
+    if (prev && _snapEq(prev, snap)) return;
+  }
   // drop any redo future — we branched
   history.stack.length = history.index + 1;
-  history.stack.push(_cloneGraph());
+  history.stack.push(snap);
   history.index++;
   if (history.stack.length > history.max){
     history.stack.shift();
     history.index--;
   }
+}
+function _snapEq(a, b){
+  if (a.nodes.length !== b.nodes.length) return false;
+  if (a.connections.length !== b.connections.length) return false;
+  for (let i = 0; i < a.nodes.length; i++){
+    const na = a.nodes[i], nb = b.nodes[i];
+    if (na.id !== nb.id || na.type !== nb.type) return false;
+    if (na.x !== nb.x || na.y !== nb.y) return false;
+    if (JSON.stringify(na.params) !== JSON.stringify(nb.params)) return false;
+    if (JSON.stringify(na.defaults) !== JSON.stringify(nb.defaults)) return false;
+  }
+  for (let i = 0; i < a.connections.length; i++){
+    const ca = a.connections[i], cb = b.connections[i];
+    if (ca.from.nodeId !== cb.from.nodeId || ca.from.socket !== cb.from.socket) return false;
+    if (ca.to.nodeId   !== cb.to.nodeId   || ca.to.socket   !== cb.to.socket)   return false;
+  }
+  return true;
 }
 function undo(){
   if (history.index <= 0) return false;

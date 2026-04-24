@@ -63,10 +63,16 @@ function createBloomPipeline(gl){
     }
   `;
 
-  // Horizontal blur + luma threshold. Nine taps along X at the given radius.
-  // Threshold is applied AT SAMPLE TIME so we never blur the dark areas —
-  // just the bright parts that pass the cutoff, which is why the output
-  // looks like "bloom from bright spots" instead of "blurred whole scene".
+  // Horizontal blur + specular/luma threshold. Nine taps along X at the given
+  // radius. Threshold is applied AT SAMPLE TIME so we never blur matte or dark
+  // pixels — just the bright, shiny ones.
+  //
+  // The mask combines luminance and the specular map stored in alpha: a pixel
+  // only contributes to bloom if it's both BRIGHT and SHINY. A matte white
+  // wall (high lum, low spec) stays unlit; a dark mirror (low lum, high spec)
+  // also stays unlit; a bright specular highlight (high both) glows. The
+  // Output node writes specular into .a — when unconnected it defaults to
+  // 1.0, which recovers the original "bloom whatever is bright" behavior.
   const FS_H = `
     precision mediump float;
     uniform sampler2D u_src;
@@ -81,10 +87,11 @@ function createBloomPipeline(gl){
       for (int i = -4; i <= 4; i++){
         float w = exp(-0.3 * float(i*i));
         vec2 uv = v_uv + vec2(float(i), 0.0) * u_texelSize * u_radius;
-        vec3 c  = texture2D(u_src, uv).rgb;
-        float lum = dot(c, vec3(0.299, 0.587, 0.114));
-        c *= smoothstep(u_threshold, u_threshold + 0.1, lum);
-        color += c * w;
+        vec4 s    = texture2D(u_src, uv);
+        float lum = dot(s.rgb, vec3(0.299, 0.587, 0.114));
+        float spec = s.a;
+        float mask = smoothstep(u_threshold, u_threshold + 0.1, lum * spec);
+        color += s.rgb * mask * w;
         tw    += w;
       }
       gl_FragColor = vec4(color / tw, 1.0);

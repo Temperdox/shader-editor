@@ -559,11 +559,13 @@ function attachNodeDrag(el, node){
       ? state.nodes.filter(n => state.selected.has(n.id))
       : [node];
     const origins = new Map(group.map(n => [n.id, { x: n.x, y: n.y }]));
+    let moved = false;
     el.classList.add('dragging');
 
     const onMove = (ev) => {
       const dx = (ev.clientX - startX) / state.view.scale;
       const dy = (ev.clientY - startY) / state.view.scale;
+      if (dx !== 0 || dy !== 0) moved = true;
       for (const g of group){
         const o = origins.get(g.id);
         g.x = o.x + dx;
@@ -580,7 +582,7 @@ function attachNodeDrag(el, node){
       el.classList.remove('dragging');
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      pushHistory();   // one history entry per drag, not per pixel
+      if (moved) pushHistory();   // skip no-op clicks
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -856,8 +858,10 @@ function startMarquee(e){
                          Cross-selection connections are dropped. */
 function copySelection(){
   if (!state.selected.size){ toast('nothing selected'); return; }
-  const sel = state.nodes.filter(n => state.selected.has(n.id));
-  // Copy only type + relative position.
+  // The Output node is singleton — don't copy it. Silently drop it from the
+  // selection snapshot so a marquee-over-everything still copies the rest.
+  const sel = state.nodes.filter(n => state.selected.has(n.id) && n.type !== 'output');
+  if (!sel.length){ toast('cannot copy output', 'err'); return; }
   const originX = Math.min(...sel.map(n => n.x));
   const originY = Math.min(...sel.map(n => n.y));
   clipboard = {
@@ -890,7 +894,9 @@ function pasteClipboard(){
 
 function duplicateSelection(){
   if (!state.selected.size){ toast('nothing selected'); return; }
-  const selNodes = state.nodes.filter(n => state.selected.has(n.id));
+  // Output is a singleton — exclude it from duplication (same as copy).
+  const selNodes = state.nodes.filter(n => state.selected.has(n.id) && n.type !== 'output');
+  if (!selNodes.length){ toast('cannot duplicate output', 'err'); return; }
   // id remap: old id → new id (for rewiring internal connections)
   const idMap = new Map();
   const newNodes = selNodes.map(n => {
