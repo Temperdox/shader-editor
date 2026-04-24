@@ -85,7 +85,11 @@ function renderNode(node){
     label.textContent = `${sock.name} (${sock.type})`;
     row.appendChild(label);
 
-    if (!connected){
+    // Unconnected float/vec3 inputs normally get an inline editor beside the
+    // label. Sockets can opt out with `noInline:true` when another UI already
+    // controls their value — e.g. the Color node's r/g/b inputs, whose
+    // static values come from the `rgb` color-picker param instead.
+    if (!connected && !sock.noInline){
       const inline = makeInlineSocketInput(node, sock);
       if (inline) row.appendChild(inline);
     }

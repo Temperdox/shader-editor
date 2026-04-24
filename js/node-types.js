@@ -168,12 +168,26 @@ const NODE_TYPES = {
     },
   },
   color: {
-    category:'Input', title:'Color', desc:'vec3 RGB constant',
-    inputs:[], outputs:[{name:'out', type:'vec3'}],
+    category:'Input', title:'Color', desc:'vec3 RGB — channels overridable by inputs',
+    // Each channel has an optional float input. When wired, that input drives
+    // the channel (e.g. a Random for a pastel-shifting color). When NOT wired,
+    // the `rgb` color-picker param supplies the value. `noInline:true` keeps
+    // the per-channel number field out of the node body so the picker is the
+    // only static-input UI — prevents the ambiguous "why isn't my inline
+    // number affecting anything?" situation.
+    inputs:[
+      {name:'r', type:'float', default:0, noInline:true},
+      {name:'g', type:'float', default:0, noInline:true},
+      {name:'b', type:'float', default:0, noInline:true},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
     params:[{name:'rgb', kind:'color', default:[0.78, 0.58, 0.20]}],
     generate:(ctx) => {
-      const [r, g, b] = ctx.params.rgb;
-      return { exprs:{ out:`vec3(${glslNum(r)}, ${glslNum(g)}, ${glslNum(b)})` } };
+      const [pR, pG, pB] = ctx.params.rgb;
+      const r = ctx.isConnected('r') ? ctx.inputs.r : glslNum(pR);
+      const g = ctx.isConnected('g') ? ctx.inputs.g : glslNum(pG);
+      const b = ctx.isConnected('b') ? ctx.inputs.b : glslNum(pB);
+      return { exprs:{ out:`vec3(${r}, ${g}, ${b})` } };
     },
   },
 
@@ -225,6 +239,15 @@ const NODE_TYPES = {
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`abs(${ctx.inputs.x})` } }),
+  },
+  floor: {
+    category:'Math', title:'Floor', desc:'floor(x) — round down to integer',
+    inputs:[{name:'x', type:'float', default:0}],
+    outputs:[{name:'out', type:'float'}],
+    // Pair with a scaled Time to get stepped values ("tick every N seconds"),
+    // which combined with Random gives you clean slow drift instead of the
+    // per-frame flicker that a continuous seed produces.
+    generate:(ctx) => ({ exprs:{ out:`floor(${ctx.inputs.x})` } }),
   },
   sin: {
     category:'Math', title:'Sin', desc:'sin(x)',

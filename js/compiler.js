@@ -72,6 +72,13 @@ function compileGraph(){
       inputs: inputExprs,
       params: node.params,
       tmp:(prefix) => `_${prefix}_${(++tmpCounter).toString(36)}`,
+      // Let generate() distinguish "input has an upstream wire" from "input
+      // is unconnected and falling back to its default literal." Only a few
+      // nodes need this — the Color node uses it so unconnected channels
+      // fall back to the color-picker param instead of the socket's default.
+      isConnected: (socketName) => {
+        return (edgesByTo.get(nid) || []).some(e => e.to.socket === socketName);
+      },
     };
 
     let result;

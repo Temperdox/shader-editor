@@ -572,73 +572,80 @@ function tplPlasmaWave(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
+  // --- BASE PLASMA (no random frequency) ---
+  // Random-driven frequencies caused every-frame hash flicker. Here the
+  // Multiply `b` sockets hold the frequencies as inline defaults (6 and
+  // 5), so the wave pattern itself is steady; only the COLORS cycle
+  // randomly, far below flicker rate.
   const uv    = n('uv',        -920,  40);
   const split = n('splitVec2', -640,  40);
 
-  // two time streams at different speeds — gives the cross-rhythm
   const timeA = n('time', -920, 240, { scale: 1.0 });
   const timeB = n('time', -920, 380, { scale: 1.3 });
 
-  // RANDOM-DRIVEN FREQUENCIES. Two slow time streams seed two Random nodes
-  // quantized to 0.1 steps in the [4, 8] range, replacing what used to be
-  // Float constants of 6 and 5. Because Random rehashes every frame, the
-  // base frequencies jitter between values like 5.3 / 6.7 / 4.9 … which
-  // gives the whole plasma a "random motion" that the plain sin+cos setup
-  // never had.
-  const timeRandA = n('time', -920, 520, { scale: 0.35 });
-  const timeRandB = n('time', -920, 660, { scale: 0.47 });
-  const rFreqX    = n('random', -640, -120,
-    { mode: 'decimal', precision: 1 },
-    { min: 4, max: 8 });
-  const rFreqY    = n('random', -640,  520,
-    { mode: 'decimal', precision: 1 },
-    { min: 3, max: 7 });
-
-  // Wave A: sin(x * rFreqX + timeA)
-  const xMul  = n('multiply', -400,  -40);
+  const xMul  = n('multiply', -400,  -40, {}, { b: 6 });
   const phA   = n('add',      -160,  -40);
   const waveA = n('sin',        80,  -40);
 
-  // Wave B: cos(y * rFreqY + timeB)
-  const yMul  = n('multiply', -400, 200);
+  const yMul  = n('multiply', -400, 200, {}, { b: 5 });
   const phB   = n('add',      -160, 200);
   const waveB = n('cos',        80, 200);
 
-  // combine A + B → range -2..2, then normalize to 0..1
   const sum   = n('add',       320,  80);
   const halfS = n('float',    -160, 360, { value: 0.25 });
   const scl   = n('multiply',  560,  80);
   const biasV = n('float',     320, 200, { value: 0.5 });
   const t01   = n('add',       800,  80);
 
-  // two contrasting colors that read as "sunset plasma"
-  const hot   = n('color', 560,  -240, { rgb: [1.00, 0.45, 0.20] });
-  const cold  = n('color', 560,  -120, { rgb: [0.45, 0.20, 0.85] });
-  const mix01 = n('mix',   1060,   40);
+  // --- RANDOM PASTEL COLORS ---
+  // Slow-stepped time is the trick to avoiding flicker: Time(×0.3) → Floor
+  // only ticks forward every ~3.3 seconds, so the 6 Randoms seeded from it
+  // hold their values between ticks and snap to fresh pastels on each tick.
+  const tSlow = n('time',  -920, 560, { scale: 0.3 });
+  const tFlr  = n('floor', -640, 560);
 
-  const out   = n('output', 1360,   40);
+  // Each of the six Random nodes (2 colors × 3 channels) shares the same
+  // floor-time seed but gets a unique `seedVec3` default so the 6 values
+  // stay decorrelated. Range 0.6–1.0 = lightness floor that guarantees
+  // pastel (no dark / saturated colors).
+  const mkChan = (x, y, off) =>
+    n('random', x, y,
+      { mode: 'decimal', precision: 2 },
+      { min: 0.6, max: 1.0, seedVec3: off }
+    );
 
+  const c1r = mkChan(-160, -520, [1, 0, 0]);
+  const c1g = mkChan(-160, -400, [2, 0, 0]);
+  const c1b = mkChan(-160, -280, [3, 0, 0]);
+  const c2r = mkChan(-160,  560, [4, 0, 0]);
+  const c2g = mkChan(-160,  700, [5, 0, 0]);
+  const c2b = mkChan(-160,  840, [6, 0, 0]);
+
+  // Base pickers stay as a fallback — if the user DISCONNECTS a Random from
+  // one channel, the picker's matching channel value takes over. Current
+  // defaults: warm peach, cool periwinkle.
+  const col1 = n('color',  320, -400, { rgb: [0.95, 0.70, 0.55] });
+  const col2 = n('color',  320,  700, { rgb: [0.60, 0.75, 0.95] });
+
+  const mix01 = n('mix',    900,  40);
+  const out   = n('output', 1260,  40);
+
+  // --- WIRING ---
   c(uv,    'out', split, 'v');
 
-  // seed the two frequency randoms from independent slow-time sources
-  c(timeRandA, 'out', rFreqX, 'seed');
-  c(timeRandB, 'out', rFreqY, 'seed');
+  // x wave
+  c(split, 'x',   xMul, 'a');
+  c(xMul,  'out', phA,  'a');
+  c(timeA, 'out', phA,  'b');
+  c(phA,   'out', waveA,'x');
 
-  // x wave — rFreqX replaces the old constant 6.0
-  c(split,  'x',   xMul, 'a');
-  c(rFreqX, 'out', xMul, 'b');
-  c(xMul,   'out', phA,  'a');
-  c(timeA,  'out', phA,  'b');
-  c(phA,    'out', waveA,'x');
+  // y wave
+  c(split, 'y',   yMul, 'a');
+  c(yMul,  'out', phB,  'a');
+  c(timeB, 'out', phB,  'b');
+  c(phB,   'out', waveB,'x');
 
-  // y wave — rFreqY replaces the old constant 5.0
-  c(split,  'y',   yMul, 'a');
-  c(rFreqY, 'out', yMul, 'b');
-  c(yMul,   'out', phB,  'a');
-  c(timeB,  'out', phB,  'b');
-  c(phB,    'out', waveB,'x');
-
-  // combined → t in 0..1
+  // combine → t01 in 0..1
   c(waveA, 'out', sum,  'a');
   c(waveB, 'out', sum,  'b');
   c(sum,   'out', scl,  'a');
@@ -646,8 +653,26 @@ function tplPlasmaWave(){
   c(scl,   'out', t01,  'a');
   c(biasV, 'out', t01,  'b');
 
-  c(cold, 'out', mix01, 'a');
-  c(hot,  'out', mix01, 'b');
+  // slow-stepped seed fans out to every Random (output fan-out in action)
+  c(tSlow, 'out', tFlr, 'x');
+  c(tFlr,  'out', c1r,  'seed');
+  c(tFlr,  'out', c1g,  'seed');
+  c(tFlr,  'out', c1b,  'seed');
+  c(tFlr,  'out', c2r,  'seed');
+  c(tFlr,  'out', c2g,  'seed');
+  c(tFlr,  'out', c2b,  'seed');
+
+  // randoms drive the color channels (each wired Random overrides its
+  // matching channel from the color-picker param)
+  c(c1r, 'out', col1, 'r');
+  c(c1g, 'out', col1, 'g');
+  c(c1b, 'out', col1, 'b');
+  c(c2r, 'out', col2, 'r');
+  c(c2g, 'out', col2, 'g');
+  c(c2b, 'out', col2, 'b');
+
+  c(col1, 'out', mix01, 'a');
+  c(col2, 'out', mix01, 'b');
   c(t01,  'out', mix01, 't');
 
   c(mix01, 'out', out, 'color');
