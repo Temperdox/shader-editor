@@ -185,7 +185,7 @@ float sdfHexagon(vec2 p, float r){
 }`,
   sdfTriangle: `
 /* Signed distance to an equilateral triangle pointing up (apex at +y).
-   `r` is the circumradius — the triangle fits inside a circle of radius r. */
+   r is the circumradius — the triangle fits inside a circle of that radius. */
 float sdfTriangle(vec2 p, float r){
   const float k = 1.7320508;   // sqrt(3)
   p.x = abs(p.x) - r;
