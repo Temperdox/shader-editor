@@ -272,8 +272,13 @@ const PREVIEW = (() => {
     // shader u_mouse — inverted-x so the shader hotspot lands diametrically
     // opposite the cursor (matching the sheen's convention).
     const card = faceCanvas.getBoundingClientRect();
+    // Both axes inverted: the shader's v_uv has its origin at the BOTTOM-left
+    // (WebGL/GL convention), and we want the mouse-driven glow to track the
+    // cursor's screen position — cursor at the bottom of the card should put
+    // the glow at the bottom of the rendered face, not at the top. This
+    // matches the editor background shader's `my = 1 - clientY/height` flip.
     shaderMX = Math.max(0, Math.min(1, 1 - (e.clientX - card.left) / card.width));
-    shaderMY = Math.max(0, Math.min(1,     (e.clientY - card.top)  / card.height));
+    shaderMY = Math.max(0, Math.min(1, 1 - (e.clientY - card.top)  / card.height));
   }
   function onPointerLeave(){
     hovering = false;
