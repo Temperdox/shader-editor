@@ -328,12 +328,16 @@ const NODE_TYPES = {
     // cursor so Fresnel / iridescence / Lambert react live to hover.
     generate:() => ({ exprs:{ out: 'u_simLight' } }),
   },
-  simRotation: {
-    category:'Input', title:'Sim Rotation', desc:'cursor-driven rotation angle (Lighting button)',
-    inputs:[], outputs:[{name:'out', type:'float'}],
-    // Same on/off gate as Sim Light, but outputs a float angle (radians)
-    // suitable for feeding Rotate UV. 0 when Lighting is off.
-    generate:() => ({ exprs:{ out: 'u_simRot' } }),
+  worldNormal: {
+    category:'Input', title:'World Normal', desc:'per-fragment 3D normal from the test surface',
+    inputs:[], outputs:[{name:'out', type:'vec3'}],
+    // Exposes the `v_surfaceNormal` varying produced by the vertex shader.
+    // When the Surface button is OFF the test mesh stays flat and the
+    // normal reads as (0, 0, 1); when ON the VS analytically computes
+    // per-vertex normals from a noise-based height field and passes them
+    // through here so shading nodes (Lambert, Fresnel, Iridescence) have
+    // real 3D normals to work with — useful as a lighting test bed.
+    generate:() => ({ exprs:{ out: 'v_surfaceNormal' } }),
   },
   lightDir: {
     category:'Input', title:'Light Dir', desc:'directional light (vec3, normalized)',

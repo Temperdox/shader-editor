@@ -1087,14 +1087,9 @@ function tplCrystal(){
   const { n, c } = _tplHelpers();
 
   // --- inputs ---
-  const cuv    = n('centeredUV', -1400,   0);
-  const tIrid  = n('time',       -1400, 160, { scale: 0.25 });
-  const tSheen = n('time',       -1400, 300, { scale: 0.9  });
-  const simRot = n('simRotation',-1400, 440);   // 0 by default; cursor-X when Lighting is on
-
-  // Rotate the centered UV by the sim-rotation angle so the crystal
-  // appears to turn with the cursor when Lighting is on.
-  const rot = n('rotateUV', -1120, 80);
+  const cuv    = n('centeredUV', -1120,   0);
+  const tIrid  = n('time',       -1120, 160, { scale: 0.25 });
+  const tSheen = n('time',       -1120, 300, { scale: 0.9  });
 
   // --- shape (centered, tall pentagon crystal) ---
   const sdf  = n('sdfCrystal', -860, 80);
@@ -1167,10 +1162,7 @@ function tplCrystal(){
   });
 
   // --- wiring ---
-  // rotate the UV by simRotation, then feed into the crystal SDF
-  c(cuv,    'p',   rot, 'uv');
-  c(simRot, 'out', rot, 'angle');
-  c(rot,    'out', sdf, 'p');
+  c(cuv, 'p', sdf, 'p');
 
   // SDF → normal / masks
   c(sdf, 'out', nor,     'sd');
@@ -1186,7 +1178,7 @@ function tplCrystal(){
   c(view,   'out', fres, 'view');
 
   // sheen uses UV (spatial) + time for a sliding highlight
-  c(rot,    'out', sheen, 'uv');
+  c(cuv,    'p',   sheen, 'uv');
   c(tSheen, 'out', sheen, 'time');
 
   // body glow = mix(black, iridescence, glowMsk * bodyAmt)

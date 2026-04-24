@@ -182,12 +182,13 @@ precision mediump float;
 uniform float u_time;
 uniform vec2  u_mouse;
 uniform vec2  u_resolution;
-// Sim-lighting uniforms: u_simLight is a vec3 light direction that tracks
-// the cursor when the Lighting button is active (0,0,1 when off + no hover);
-// u_simRot is a slight object-rotation angle in radians driven by cursor X.
-// See renderer.js / preview.js for the per-frame update logic.
+// Sim-lighting uniform: vec3 light direction that tracks the cursor when the
+// Lighting button is active, or (0, 0, 1) when off. See renderer.js.
 uniform vec3  u_simLight;
-uniform float u_simRot;
+// Test-surface varying: the VS computes a procedural 3D normal from a noise
+// height field and passes it here. Reads (0, 0, 1) when the Surface button
+// is off. See renderer.js's vertex shader.
+varying vec3  v_surfaceNormal;
 ${samplerDecls}
 varying vec2  v_uv;
 

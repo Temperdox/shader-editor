@@ -46,8 +46,8 @@ const PREVIEW = (() => {
   // --- WebGL state ---
   let gl = null;
   let program = null;
-  let posBuf, uvBuf;
-  let uTime, uMouse, uRes, uSimLight, uSimRot;
+  let posBuf, uvBuf, idxBuf, indexCount = 0;
+  let uTime, uMouse, uRes, uSimLight, uSurface;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
@@ -91,12 +91,40 @@ const PREVIEW = (() => {
     lastAttr.clear();
   }
 
+  // Same VS as renderer.js — compiles a noise-height-field normal when the
+  // Surface button is on, so v_surfaceNormal carries real 3D variation even
+  // in preview mode. See js/renderer.js for the full rationale.
   const VS_SRC = `
     attribute vec2 a_position;
     attribute vec2 a_uv;
+    uniform float u_surface;
     varying vec2 v_uv;
+    varying vec3 v_surfaceNormal;
+
+    float _vsHash(vec2 p){
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+    }
+    float _vsNoise(vec2 p){
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f*f*(3.0 - 2.0*f);
+      float a = _vsHash(i);
+      float b = _vsHash(i + vec2(1.0, 0.0));
+      float c = _vsHash(i + vec2(0.0, 1.0));
+      float d = _vsHash(i + vec2(1.0, 1.0));
+      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+    }
+    float _vsHeight(vec2 p){
+      return (_vsNoise(p * 3.0) * 0.6 + _vsNoise(p * 7.0) * 0.3) * u_surface;
+    }
+
     void main(){
       v_uv = a_uv;
+      float e = 0.04;
+      float hC = _vsHeight(a_position);
+      float hR = _vsHeight(a_position + vec2(e, 0.0));
+      float hU = _vsHeight(a_position + vec2(0.0, e));
+      v_surfaceNormal = normalize(vec3((hC - hR) / e, (hC - hU) / e, 1.0));
       gl_Position = vec4(a_position, 0.0, 1.0);
     }
   `;
@@ -127,19 +155,47 @@ const PREVIEW = (() => {
     }
     // Enable dFdx/dFdy support (see renderer.js for details).
     gl.getExtension('OES_standard_derivatives');
+    // Grid mesh — same as renderer.js so v_surfaceNormal is populated in
+    // preview too. 64×64 subdivisions.
+    const GRID = 64;
+    const nVerts = (GRID + 1) * (GRID + 1);
+    const positions = new Float32Array(nVerts * 2);
+    const uvs       = new Float32Array(nVerts * 2);
+    {
+      let p = 0;
+      for (let y = 0; y <= GRID; y++){
+        for (let x = 0; x <= GRID; x++){
+          const u = x / GRID, v = y / GRID;
+          positions[p] = u*2-1; positions[p+1] = v*2-1;
+          uvs[p] = u;           uvs[p+1] = v;
+          p += 2;
+        }
+      }
+    }
+    const indices = new Uint16Array(GRID * GRID * 6);
+    {
+      let i = 0;
+      for (let y = 0; y < GRID; y++){
+        for (let x = 0; x < GRID; x++){
+          const a = y * (GRID + 1) + x;
+          const b = a + 1;
+          const c = a + (GRID + 1);
+          const d = c + 1;
+          indices[i++] = a; indices[i++] = b; indices[i++] = c;
+          indices[i++] = b; indices[i++] = d; indices[i++] = c;
+        }
+      }
+    }
     posBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      -1,-1,  1,-1, -1, 1,
-      -1, 1,  1,-1,  1, 1,
-    ]), gl.STATIC_DRAW);
-
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
     uvBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
-      0,0, 1,0, 0,1,
-      0,1, 1,0, 1,1,
-    ]), gl.STATIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
+    idxBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+    indexCount = indices.length;
 
     // Preview has its own GL context, so it needs its own texture registry
     // (GL objects aren't shareable across contexts). Sources are shared
@@ -176,12 +232,13 @@ const PREVIEW = (() => {
     gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
     gl.enableVertexAttribArray(aUv);
     gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
 
     uTime     = gl.getUniformLocation(program, 'u_time');
     uMouse    = gl.getUniformLocation(program, 'u_mouse');
     uRes      = gl.getUniformLocation(program, 'u_resolution');
     uSimLight = gl.getUniformLocation(program, 'u_simLight');
-    uSimRot   = gl.getUniformLocation(program, 'u_simRot');
+    uSurface  = gl.getUniformLocation(program, 'u_surface');
 
     // Same texture binding strategy as renderer.js — one uniform1i per slot
     // at link time, then just rebind the underlying texture in `frame()`.
@@ -251,8 +308,8 @@ const PREVIEW = (() => {
         gl.uniform2f(uMouse, shaderMX, shaderMY);
         gl.uniform2f(uRes, faceCanvas.width, faceCanvas.height);
         // Sim-lighting: when the Lighting button is active, drive a virtual
-        // light direction + slight rotation from the card-relative cursor
-        // position so the shader reacts live to hover. See renderer.js.
+        // light direction from the card-relative cursor position so the
+        // shader reacts live to hover. See renderer.js.
         const simOn = document.body.classList.contains('sim-lighting-on');
         if (simOn){
           const lx = (shaderMX - 0.5) * 2.0;
@@ -260,16 +317,18 @@ const PREVIEW = (() => {
           const lz = 0.8;
           const len = Math.hypot(lx, ly, lz) || 1;
           if (uSimLight) gl.uniform3f(uSimLight, lx/len, ly/len, lz/len);
-          if (uSimRot)   gl.uniform1f(uSimRot, (shaderMX - 0.5) * 0.9);
         } else {
           if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 1.0);
-          if (uSimRot)   gl.uniform1f(uSimRot, 0.0);
         }
+        // Surface mode — VS deforms vertex normals when on.
+        const surfaceOn = document.body.classList.contains('surface-on');
+        if (uSurface) gl.uniform1f(uSurface, surfaceOn ? 1.0 : 0.0);
         for (const b of textureBindings){
           gl.activeTexture(gl.TEXTURE0 + b.slot);
           gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
         }
-        // re-bind the program's attribs — bloom passes use their own quad
+        // re-bind the program's attribs + index buffer — bloom passes use
+        // their own quad buffers
         gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
         const aPos = gl.getAttribLocation(program, 'a_position');
         gl.enableVertexAttribArray(aPos);
@@ -278,7 +337,8 @@ const PREVIEW = (() => {
         const aUv = gl.getAttribLocation(program, 'a_uv');
         gl.enableVertexAttribArray(aUv);
         gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+        gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
       };
 
       if (bloomOn && bloom){
