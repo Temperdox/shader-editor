@@ -302,6 +302,19 @@ const NODE_TYPES = {
     inputs:[], outputs:[{name:'out', type:'vec2'}],
     generate:() => ({ exprs:{ out:'u_mouse' } }),
   },
+  cursorPos: {
+    category:'Input', title:'Cursor', desc:'cursor position in centred UV space (always live, no toggle)',
+    inputs:[], outputs:[{name:'pos', type:'vec2'}],
+    // Derived from `u_mouse` (which always tracks the pointer regardless of
+    // the Lighting button) and re-centred + aspect-corrected to match
+    // Centered UV's coordinate space. Use this for parallax direction,
+    // View Mask offset, or any other "what is the cursor doing" lookup
+    // that should NOT be gated by the Lighting button. Sim Light's
+    // `cursor` output, by contrast, is only valid when Lighting is on.
+    generate:() => ({ exprs:{
+      pos: '((u_mouse - vec2(0.5)) * vec2(u_resolution.x / u_resolution.y, 1.0))',
+    } }),
+  },
   resolution: {
     category:'Input', title:'Resolution', desc:'canvas size in px',
     inputs:[], outputs:[{name:'out', type:'vec2'}],

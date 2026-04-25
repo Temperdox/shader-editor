@@ -2060,8 +2060,14 @@ function tplParallaxAurora(){
   const { n, c } = _tplHelpers();
 
   // === inputs ===
-  const cuv  = n('centeredUV', -1480, -120);
-  const simL = n('simLight',   -1480,  100);    // outputs `cursor` in centred UV
+  const cuv     = n('centeredUV', -1480, -120);
+  // Always-live cursor (no Lighting toggle gating). Drives parallax direction
+  // and View Mask offset so the parallax effect works the moment you load
+  // the template, not only when Lighting is on.
+  const cursor  = n('cursorPos',  -1480,   60);
+  // Sim Light is still here for any future lighting wiring; not used by the
+  // current layers but available if you want to add a Lambert lane.
+  const simL    = n('simLight',   -1480,  220);
   c(cuv, 'p', simL, 'pos');
 
   // === parallax UVs at three depths ===
@@ -2093,9 +2099,9 @@ function tplParallaxAurora(){
   const fgInv   = n('subtract',   220, 220, {}, { a: 1.0 });             // 1 - smoothstep → bright at centres
   const fgGray  = n('grayscale',  540, 220);
 
-  // === View Mask: cursor offset → near/far fades ===
+  // === View Mask: cursor offset → near/far fades (always live) ===
   const vm = n('viewMask', -780, 420, {}, { threshold: 0.05, softness: 0.4 });
-  c(simL, 'cursor', vm, 'offset');
+  c(cursor, 'pos', vm, 'offset');
 
   // foreground sparkles fade with `near` (visible only when cursor is centred)
   const fgFade = n('mix',  860, 240);   // mix(black, sparkleGray, vm.near)
@@ -2123,13 +2129,15 @@ function tplParallaxAurora(){
   });
 
   // === wiring ===
-  // shared cursor-offset feeds every Parallax UV's `direction` input
-  c(cuv,  'p',      bgUV,  'uv');
-  c(simL, 'cursor', bgUV,  'direction');
-  c(cuv,  'p',      midUV, 'uv');
-  c(simL, 'cursor', midUV, 'direction');
-  c(cuv,  'p',      fgUV,  'uv');
-  c(simL, 'cursor', fgUV,  'direction');
+  // Shared cursor offset feeds every Parallax UV's `direction` input.
+  // Using `cursor` (not `simL.cursor`) so parallax is live even when
+  // Lighting is off.
+  c(cuv,    'p',   bgUV,  'uv');
+  c(cursor, 'pos', bgUV,  'direction');
+  c(cuv,    'p',   midUV, 'uv');
+  c(cursor, 'pos', midUV, 'direction');
+  c(cuv,    'p',   fgUV,  'uv');
+  c(cursor, 'pos', fgUV,  'direction');
 
   // bg lane
   c(bgUV,    'out', bgFbm, 'p');
