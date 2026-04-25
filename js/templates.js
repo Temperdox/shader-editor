@@ -76,25 +76,47 @@ function tplMarbleGold(){
 }
 
 /* ---------------- Normal Preview — shows the new normalMap node ---------------- */
-/* Normal Preview — pure tangent-space normal-as-RGB visualization.
- * Maps the procedural Normal Map's output through normalToColor to get the
- * classic blue-purple "normal map" look (each channel = a normal axis).
- * No lighting — strictly a debug view of what the normal direction looks
- * like at every pixel. For a LIT version, see "Normal + Color". */
+/* Normal Preview — classic blue/purple normal-as-RGB visualization,
+ * MODULATED by Lambert against the cursor-driven Sim Light. With the
+ * Lighting button off the Lambert factor is ~1 everywhere and you see
+ * the raw normal-coloured map; turn Lighting on and the cursor's virtual
+ * point light shades the visualization — bumps facing the cursor stay
+ * brightly coloured, the dark side fades toward the ambient floor. So
+ * the same template doubles as a normal-map debug view AND a lighting
+ * demo. (For a fully lit "warm surface" look without the channel colours,
+ * see "Normal + Color".) */
 function tplNormalPreview(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const cuv    = n('centeredUV',     -520,  40);
-  const time   = n('time',           -520, 220);
-  const normal = n('normalMap',      -160,  80, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
-  const color  = n('normalToColor',   220,  80);
-  const out    = n('output',          560,  80);
+  const cuv    = n('centeredUV',    -820,  40);
+  const time   = n('time',          -820, 220);
+  const normal = n('normalMap',     -520,  80, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
+  const color  = n('normalToColor', -180,  20);
 
-  c(cuv,    'p',       normal, 'p');
-  c(time,   'out',     normal, 'time');
-  c(normal, 'normal',  color,  'n');
-  c(color,  'out',     out,    'color');
+  // Lighting lane: per-fragment point-light direction → Lambert.
+  const simL = n('simLight', -820, 380);
+  const lamb = n('lambert',  -180, 200, {}, { ambient: 0.35 });   // higher ambient so the colours stay readable when unlit
+
+  // Modulate the normal-RGB visualization by the lambert factor.
+  // mix(black, color, lamb) is just `color * lamb` for vec3 — the Mix
+  // node already does that, no need for a Multiply node.
+  const lit = n('mix', 180, 100);
+
+  const out = n('output', 540, 100);
+
+  c(cuv,    'p',      normal, 'p');
+  c(time,   'out',    normal, 'time');
+  c(cuv,    'p',      simL,   'pos');
+
+  c(normal, 'normal', color, 'n');
+  c(normal, 'normal', lamb,  'normal');
+  c(simL,   'out',    lamb,  'lightDir');
+
+  c(color, 'out', lit, 'b');
+  c(lamb,  'out', lit, 't');
+
+  c(lit, 'out', out, 'color');
 }
 
 /* Normal + Color — same procedural normal as Normal Preview, but rendered
