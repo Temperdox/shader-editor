@@ -2035,6 +2035,143 @@ function tplLightingCompare(){
   c(fresW,    'out', out, 'specular');
 }
 
+/* Parallax Aurora — multi-layered scene built from the new Layer Stack,
+ * Parallax UV, and View Mask nodes.
+ *
+ * Three pattern layers move at different speeds as you sweep the cursor:
+ *   • bg   (depth 0.04) — slow drifting FBM gradient (distant aurora wash)
+ *   • mid  (depth 0.18) — medium-frequency cloud noise
+ *   • fg   (depth 0.45) — voronoi pinpoint sparkles (close, fast parallax)
+ *
+ * View Mask reads the cursor's offset from centre and emits two factors:
+ *   • near  → fades the foreground sparkles in only when cursor is near
+ *             centre ("looking head-on")
+ *   • far   → fades an iridescent rim sheen in only at glancing angles
+ *
+ * Layer Stack (1 base + 4 layers) composites everything with mixed blend
+ * modes — base colour, screen-blended bg + mid for soft additive light,
+ * additive sparkles, additive sheen.
+ *
+ * Hit Lighting and move the cursor to feel the parallax depth and the
+ * view-driven fade between sparkles (centre) and sheen (edges).
+ */
+function tplParallaxAurora(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  // === inputs ===
+  const cuv  = n('centeredUV', -1480, -120);
+  const simL = n('simLight',   -1480,  100);    // outputs `cursor` in centred UV
+  c(cuv, 'p', simL, 'pos');
+
+  // === parallax UVs at three depths ===
+  const bgUV  = n('parallaxUV', -1140, -200, {}, { depth: 0.04 });
+  const midUV = n('parallaxUV', -1140,  -40, {}, { depth: 0.18 });
+  const fgUV  = n('parallaxUV', -1140,  120, {}, { depth: 0.45 });
+
+  // === per-layer pattern generators ===
+  // bg: low-octave FBM gradient
+  const bgFbm   = n('fbm',   -780, -260, {}, { z: 0.0 });
+  const bgNoise = n('grayscale', -460, -260);   // float → vec3 grey for tinting
+  const bgC1    = n('color', -460, -400, { rgb: [0.05, 0.05, 0.18] });   // deep navy
+  const bgC2    = n('color', -460, -120, { rgb: [0.30, 0.18, 0.55] });   // amethyst
+  const bgMix   = n('mix',   -120, -260);
+
+  // mid: cloud-like FBM at higher frequency (scale UV by 3)
+  const midScale = n('float',     -780,  60,  { value: 3.0 });
+  const midUVx3  = n('scaleVec2', -780, -40);
+  const midFbm   = n('fbm',       -460,  -40);
+  const midGray  = n('grayscale', -120,  -40);
+  const midC     = n('color',     -460, 120, { rgb: [0.45, 0.85, 0.95] });   // sky cyan
+  const midMix   = n('mix',        220,   0);
+
+  // fg: voronoi cell distance, inverted into pinpoint sparkles
+  const fgScale = n('float',     -780, 240, { value: 14.0 });
+  const fgUVx14 = n('scaleVec2', -780, 140);
+  const fgVor   = n('voronoi',   -460, 220);   // outputs dist + id
+  const fgSpark = n('smoothstep',-120, 220, {}, { a: 0.0, b: 0.05 });   // edges 0→1, centres stay at 0
+  const fgInv   = n('subtract',   220, 220, {}, { a: 1.0 });             // 1 - smoothstep → bright at centres
+  const fgGray  = n('grayscale',  540, 220);
+
+  // === View Mask: cursor offset → near/far fades ===
+  const vm = n('viewMask', -780, 420, {}, { threshold: 0.05, softness: 0.4 });
+  c(simL, 'cursor', vm, 'offset');
+
+  // foreground sparkles fade with `near` (visible only when cursor is centred)
+  const fgFade = n('mix',  860, 240);   // mix(black, sparkleGray, vm.near)
+
+  // sheen layer: iridescent palette driven by view-mask `far` so the
+  // colour cycles with cursor distance. Multiplied by `far` again via
+  // the Mix below so it only appears at glancing angles.
+  const palette   = n('palette', -120, 540);
+  const sheenFade = n('mix',      220, 540);
+
+  // === composite via Layer Stack ===
+  // 1 base + 4 layers: bg (normal), mid (screen, 0.7), sparkles (add, 1.0), sheen (add, 0.5)
+  const baseColor = n('color', 1200, -200, { rgb: [0.02, 0.02, 0.06] });   // near-black base
+  const stack = n('layerStack', 1500, 0, {
+    numLayers: 4,
+    opacity: [1.0, 0.7, 1.0, 0.5],
+    modes:   ['normal', 'screen', 'add', 'add'],
+  });
+
+  const out = n('output', 1860, 0, {
+    bloom:          'on',
+    bloomThreshold: 0.5,
+    bloomRadius:    2.5,
+    bloomIntensity: 1.1,
+  });
+
+  // === wiring ===
+  // shared cursor-offset feeds every Parallax UV's `direction` input
+  c(cuv,  'p',      bgUV,  'uv');
+  c(simL, 'cursor', bgUV,  'direction');
+  c(cuv,  'p',      midUV, 'uv');
+  c(simL, 'cursor', midUV, 'direction');
+  c(cuv,  'p',      fgUV,  'uv');
+  c(simL, 'cursor', fgUV,  'direction');
+
+  // bg lane
+  c(bgUV,    'out', bgFbm, 'p');
+  c(bgFbm,   'out', bgNoise, 'x');
+  c(bgC1,    'out', bgMix, 'a');
+  c(bgC2,    'out', bgMix, 'b');
+  c(bgFbm,   'out', bgMix, 't');
+
+  // mid lane
+  c(midUV,   'out', midUVx3, 'v');
+  c(midScale,'out', midUVx3, 's');
+  c(midUVx3, 'out', midFbm, 'p');
+  c(midFbm,  'out', midGray, 'x');
+  c(midC,    'out', midMix, 'b');
+  c(midGray, 'out', midMix, 't');
+
+  // fg sparkle lane
+  c(fgUV,    'out', fgUVx14, 'v');
+  c(fgScale, 'out', fgUVx14, 's');
+  c(fgUVx14, 'out', fgVor, 'p');
+  c(fgVor,   'dist', fgSpark, 'x');
+  c(fgSpark, 'out',  fgInv, 'b');     // 1 - smoothstep
+  c(fgInv,   'out',  fgGray, 'x');
+  c(fgGray,  'out',  fgFade, 'b');
+  c(vm,      'near', fgFade, 't');
+
+  // sheen lane: palette colour driven by view-mask `far`, then masked by
+  // the same `far` so the sheen only appears at glancing angles.
+  c(vm,      'far', palette,   't');
+  c(palette, 'out', sheenFade, 'b');
+  c(vm,      'far', sheenFade, 't');
+
+  // Layer Stack
+  c(baseColor, 'out', stack, 'base');
+  c(bgMix,     'out', stack, 'layer0');
+  c(midMix,    'out', stack, 'layer1');
+  c(fgFade,    'out', stack, 'layer2');
+  c(sheenFade, 'out', stack, 'layer3');
+
+  c(stack, 'out', out, 'color');
+}
+
 /* ---------------- Registry (order = display order in the picker) ---------------- */
 /* Template registry. `category` groups items into collapsible sections in the
    picker UI: 'demo' is the tutorial/feature-walkthrough set, 'showcase' is the
@@ -2045,6 +2182,8 @@ const SHADER_TEMPLATES = [
     desc: 'Surface + Sim Light + Flag patch bay. Toggle diffuse/rim/iridescence.', load: tplLightingTest },
   { id: 'lightingCompare', name: 'Lighting Compare', category:'demo',
     desc: 'Side-by-side: World Normal vs Normal Map, both lit by Sim Light.', load: tplLightingCompare },
+  { id: 'parallaxAurora',  name: 'Parallax Aurora',  category:'demo',
+    desc: 'Layer Stack + Parallax UV + View Mask: 4-layer parallax scene.', load: tplParallaxAurora },
   { id: 'marbleGold',      name: 'Marble Gold',      category:'demo',
     desc: 'Warped FBM marble with gold veins — the dossier preset.',        load: tplMarbleGold },
   { id: 'marbleOnyx',      name: 'Marble Onyx',      category:'demo',

@@ -320,21 +320,27 @@ const NODE_TYPES = {
     },
   },
   simLight: {
-    category:'Input', title:'Sim Light', desc:'cursor-driven point-light direction',
+    category:'Input', title:'Sim Light', desc:'cursor-driven point-light direction + position',
     inputs:[
       // Wire Centered UV's `p` here for true per-fragment point-light
       // shading (each pixel sees the cursor as a local light). Leave
       // unconnected for the legacy global-direction behavior.
       {name:'pos', type:'vec2', default:[0, 0]},
     ],
-    outputs:[{name:'out', type:'vec3'}],
-    // u_simLight is the cursor's point-light POSITION (centered UV space +
-    // a small Z above the surface). The output is the unit direction from
-    // the fragment toward that position. With Lighting OFF the renderer
-    // parks u_simLight far away (0,0,100) so the result collapses to
-    // (0,0,1) — same "still" appearance as before.
+    outputs:[
+      {name:'out',    type:'vec3'},   // per-fragment direction toward the light
+      {name:'cursor', type:'vec2'},   // raw cursor position in centered-UV space
+    ],
+    // `out`: u_simLight − fragment_pos, normalised → per-fragment direction
+    //        toward the light. Use for Lambert / Fresnel shading.
+    // `cursor`: u_simLight.xy alone → screen-space cursor position. Use as
+    //          the `direction` input for Parallax UV nodes, or as the
+    //          `offset` input for View Mask. Both outputs collapse to a
+    //          quiescent value when Lighting is off (renderer parks
+    //          u_simLight far away at (0,0,100), so .xy ≈ (0,0)).
     generate:(ctx) => ({ exprs:{
-      out: `normalize(u_simLight - vec3(${ctx.inputs.pos}, 0.0))`,
+      out:    `normalize(u_simLight - vec3(${ctx.inputs.pos}, 0.0))`,
+      cursor: `u_simLight.xy`,
     } }),
   },
   worldNormal: {
