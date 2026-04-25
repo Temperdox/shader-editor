@@ -115,7 +115,7 @@ const PREVIEW = (() => {
       return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
     }
     float _vsHeight(vec2 p){
-      return (_vsNoise(p * 3.0) * 0.6 + _vsNoise(p * 7.0) * 0.3) * u_surface;
+      return (_vsNoise(p * 6.0) * 0.35 + _vsNoise(p * 14.0) * 0.18) * u_surface;
     }
 
     void main(){
@@ -128,7 +128,7 @@ const PREVIEW = (() => {
       // Visible 3D Y-shift, damped near the canvas edges so the mesh stays
       // flush with the borders. Collapses to a flat quad when u_surface=0.
       float edgeFalloff = 1.0 - smoothstep(0.7, 1.0, abs(a_position.y));
-      gl_Position = vec4(a_position.x, a_position.y + hC * 0.35 * edgeFalloff, 0.0, 1.0);
+      gl_Position = vec4(a_position.x, a_position.y + hC * 0.22 * edgeFalloff, 0.0, 1.0);
     }
   `;
 
@@ -310,18 +310,18 @@ const PREVIEW = (() => {
         gl.uniform1f(uTime, (performance.now() - startTime) / 1000);
         gl.uniform2f(uMouse, shaderMX, shaderMY);
         gl.uniform2f(uRes, faceCanvas.width, faceCanvas.height);
-        // Sim-lighting: when the Lighting button is active, drive a virtual
-        // light direction from the card-relative cursor position so the
-        // shader reacts live to hover. See renderer.js.
+        // Point-light position in centered-UV space. shaderMX is INVERTED
+        // for the preview card's diametric convention (cursor on right →
+        // highlight on left). See renderer.js for the full rationale.
         const simOn = document.body.classList.contains('sim-lighting-on');
         if (simOn){
-          const lx = (shaderMX - 0.5) * 2.0;
-          const ly = (shaderMY - 0.5) * 2.0;
-          const lz = 0.8;
-          const len = Math.hypot(lx, ly, lz) || 1;
-          if (uSimLight) gl.uniform3f(uSimLight, lx/len, ly/len, lz/len);
+          const aspect = faceCanvas.width / faceCanvas.height;
+          const lx = (shaderMX - 0.5) * aspect;
+          const ly = (shaderMY - 0.5);
+          const lz = 0.45;
+          if (uSimLight) gl.uniform3f(uSimLight, lx, ly, lz);
         } else {
-          if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 1.0);
+          if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
         }
         // Surface mode — VS deforms vertex normals when on.
         const surfaceOn = document.body.classList.contains('surface-on');

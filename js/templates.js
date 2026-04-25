@@ -1626,6 +1626,7 @@ function tplLightingTest(){
   const { n, c } = _tplHelpers();
 
   // --- inputs ---
+  const cuv  = n('centeredUV',  -1240,  -200);
   const nor  = n('worldNormal', -940, -120);
   const simL = n('simLight',    -940,   40);
   const view = n('viewDir',     -940,  180);
@@ -1678,6 +1679,10 @@ function tplLightingTest(){
   });
 
   // --- wiring ---
+  // Per-fragment point-light direction: feed the centered UV into Sim Light
+  // so each pixel sees the cursor as a local light source, not a single
+  // global vector.
+  c(cuv,  'p',   simL, 'pos');
   c(nor,  'out', lamb, 'normal');
   c(simL, 'out', lamb, 'lightDir');
   c(nor,  'out', fres, 'normal');

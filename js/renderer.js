@@ -54,7 +54,7 @@ const renderer = (() => {
       return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
     }
     float _vsHeight(vec2 p){
-      return (_vsNoise(p * 3.0) * 0.6 + _vsNoise(p * 7.0) * 0.3) * u_surface;
+      return (_vsNoise(p * 6.0) * 0.35 + _vsNoise(p * 14.0) * 0.18) * u_surface;
     }
 
     void main(){
@@ -75,7 +75,7 @@ const renderer = (() => {
       // damps the shift near the screen borders so the mesh stays flush
       // with the canvas edges instead of leaving gaps.
       float edgeFalloff = 1.0 - smoothstep(0.7, 1.0, abs(a_position.y));
-      gl_Position = vec4(a_position.x, a_position.y + hC * 0.35 * edgeFalloff, 0.0, 1.0);
+      gl_Position = vec4(a_position.x, a_position.y + hC * 0.22 * edgeFalloff, 0.0, 1.0);
     }
   `;
 
@@ -259,18 +259,23 @@ const renderer = (() => {
           gl.uniform1f(uTime, (performance.now() - start) / 1000);
           gl.uniform2f(uMouse, mx, my);
           gl.uniform2f(uRes, canvas.width, canvas.height);
-          // Sim-lighting uniform — see index.html #simLightBtn. When the body
-          // class is set, the virtual light direction follows the cursor;
-          // otherwise it's (0, 0, 1) so the shader looks "still".
+          // u_simLight is now a POINT-LIGHT POSITION in centered-UV space
+          // (matching Centered UV's coord system: x in ±aspect/2, y in ±0.5).
+          // The Sim Light node computes per-fragment direction = normalize(
+          // u_simLight - vec3(pos, 0)), so each pixel sees the cursor as a
+          // local point-light source rather than a single global direction.
+          // Editor mode: tracks mouse VERBATIM (no inversion).
+          // Off-state: light parked far above (0, 0, 100) → effectively
+          // (0,0,1) direction for any fragment, so the shader reads "still".
           const simOn = document.body.classList.contains('sim-lighting-on');
           if (simOn){
-            const lx = (mx - 0.5) * 2.0;
-            const ly = (my - 0.5) * 2.0;
-            const lz = 0.8;
-            const len = Math.hypot(lx, ly, lz) || 1;
-            if (uSimLight) gl.uniform3f(uSimLight, lx/len, ly/len, lz/len);
+            const aspect = canvas.width / canvas.height;
+            const lx = (mx - 0.5) * aspect;
+            const ly = (my - 0.5);                  // mx,my already GL-space (Y flipped)
+            const lz = 0.45;                         // light height above surface
+            if (uSimLight) gl.uniform3f(uSimLight, lx, ly, lz);
           } else {
-            if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 1.0);
+            if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
           }
           // Surface mode — the VS applies a noise-height-derived normal to
           // every vertex when on. Fragment shaders reading v_surfaceNormal

@@ -582,6 +582,25 @@ body.ui-hidden .toast{
   display:none !important;
 }
 
+/* ---- light-cursor follower (Lighting button) ----
+   A small lightbulb icon glued to the cursor whenever sim-lighting is on,
+   so it's clear the cursor IS the virtual light source. Hidden otherwise. */
+.light-cursor{
+  position:fixed;
+  width:30px; height:30px;
+  pointer-events:none;
+  z-index:50;
+  color:#ffe7a0;
+  filter:drop-shadow(0 0 10px rgba(255, 215, 120, .85))
+         drop-shadow(0 0 22px rgba(255, 195, 90, .55));
+  opacity:0;
+  transform:translate(-50%, -50%);
+  transition:opacity .15s ease;
+}
+body.sim-lighting-on .light-cursor{ opacity:1; }
+body.sim-lighting-on,
+body.sim-lighting-on *{ cursor:none !important; }
+
 /* ---- marquee (drag-select rectangle) ---- */
 .marquee{
   position:absolute;

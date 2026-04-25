@@ -30,6 +30,19 @@ $('#simLightBtn').addEventListener('click', () => {
   btn.classList.toggle('active', on);
 });
 
+// Lightbulb cursor follower — tracks the pointer whenever sim-lighting is
+// active so the user can see exactly where the virtual point light sits.
+// Position is updated in pixel space; CSS handles the show/hide via opacity.
+(() => {
+  const lc = $('#lightCursor');
+  if (!lc) return;
+  window.addEventListener('pointermove', (e) => {
+    if (!document.body.classList.contains('sim-lighting-on')) return;
+    lc.style.left = e.clientX + 'px';
+    lc.style.top  = e.clientY + 'px';
+  }, { passive: true });
+})();
+
 // Surface — toggles the 64×64 tessellated test mesh's procedural height
 // field. When on, the vertex shader computes per-vertex normals from a
 // noise-based height field and passes them via v_surfaceNormal (readable

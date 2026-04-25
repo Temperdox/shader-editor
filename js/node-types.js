@@ -320,13 +320,22 @@ const NODE_TYPES = {
     },
   },
   simLight: {
-    category:'Input', title:'Sim Light', desc:'cursor-driven light direction (Lighting button)',
-    inputs:[], outputs:[{name:'out', type:'vec3'}],
-    // Exposes the `u_simLight` uniform fed by the renderer. When the
-    // bottom-right Lighting button is OFF, this is a constant (0, 0, 1)
-    // so the shader reads as "still". When ON, the direction tracks the
-    // cursor so Fresnel / iridescence / Lambert react live to hover.
-    generate:() => ({ exprs:{ out: 'u_simLight' } }),
+    category:'Input', title:'Sim Light', desc:'cursor-driven point-light direction',
+    inputs:[
+      // Wire Centered UV's `p` here for true per-fragment point-light
+      // shading (each pixel sees the cursor as a local light). Leave
+      // unconnected for the legacy global-direction behavior.
+      {name:'pos', type:'vec2', default:[0, 0]},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    // u_simLight is the cursor's point-light POSITION (centered UV space +
+    // a small Z above the surface). The output is the unit direction from
+    // the fragment toward that position. With Lighting OFF the renderer
+    // parks u_simLight far away (0,0,100) so the result collapses to
+    // (0,0,1) — same "still" appearance as before.
+    generate:(ctx) => ({ exprs:{
+      out: `normalize(u_simLight - vec3(${ctx.inputs.pos}, 0.0))`,
+    } }),
   },
   worldNormal: {
     category:'Input', title:'World Normal', desc:'per-fragment 3D normal from the test surface',

@@ -230,6 +230,15 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- ---- light-source cursor (visible when Lighting is on) ---- -->
+<div class="light-cursor" id="lightCursor" aria-hidden="true">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 18h6"/>
+    <path d="M10 22h4"/>
+    <path d="M15.09 14.09c1.5-1 2.41-2.42 2.41-4.09a5.5 5.5 0 0 0-11 0c0 1.67.91 3.09 2.41 4.09"/>
+  </svg>
+</div>
+
 <!-- Scripts are classic (not modules) so the page can be opened directly from
      the filesystem without a dev server. Load order matters: helpers → node
      types → state → compiler → renderer → editor → interactions → main. -->
