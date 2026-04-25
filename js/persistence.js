@@ -89,8 +89,14 @@ function deserializeGraph(data){
   // them so subsequently-added nodes don't collide (which manifests as "two
   // nodes selected when I click one, and a different node moves on drag").
   syncUidFromState();
-  renderAll();
+  // CRITICAL: apply the new viewport transform BEFORE renderAll. Otherwise
+  // renderConnections() inside renderAll reads socket positions from the
+  // OLD CSS transform but does its math against the NEW state.view values,
+  // producing wires that are drawn in the wrong logical coordinates — they
+  // appear disconnected from the modules until something else triggers a
+  // redraw. Order matters here.
   updateViewportTransform();
+  renderAll();
   recompileShader();
   pushHistory();
 }
