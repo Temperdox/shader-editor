@@ -719,6 +719,23 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
     outputs:[{name:'out', type:'vec2'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.v} * ${ctx.inputs.s})` } }),
   },
+  parallaxUV: {
+    category:'Vector', title:'Parallax UV', desc:'shift UV by direction × depth (per-layer parallax)',
+    inputs:[
+      {name:'uv',        type:'vec2',  default:[0, 0]},
+      {name:'direction', type:'vec2',  default:[0, 0]},   // cursor offset, time-based, etc.
+      {name:'depth',     type:'float', default:0.1},      // 0 = no shift, 1 = full follow
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    // Plug a different `depth` into each layer's Parallax UV to get a
+    // foreground/background separation: distant layer with depth=0.05,
+    // close layer with depth=0.4. Wire the Sim Light's xy (split it
+    // first) into `direction` and the cursor moves the foreground more
+    // than the background — classic parallax.
+    generate:(ctx) => ({ exprs:{
+      out: `(${ctx.inputs.uv} + ${ctx.inputs.direction} * ${ctx.inputs.depth})`,
+    } }),
+  },
   grayscale: {
     category:'Vector', title:'Grayscale', desc:'float → vec3 (x, x, x)',
     inputs:[{name:'x', type:'float', default:0}],
@@ -1577,6 +1594,36 @@ float ${d} = abs(${f} - 0.5);`,
       };
     },
   },
+  viewMask: {
+    category:'Effect', title:'View Mask', desc:'visibility based on view rotation / cursor offset',
+    inputs:[
+      {name:'offset',    type:'vec2',  default:[0, 0]},   // cursor offset from centre
+      {name:'threshold', type:'float', default:0.05},     // distance below which "near" is fully on
+      {name:'softness',  type:'float', default:0.45},     // fade band width
+    ],
+    outputs:[
+      {name:'near', type:'float'},   // 1 when offset is small (cursor near centre / "facing camera")
+      {name:'far',  type:'float'},   // 1 when offset is large (cursor at edge / "tilted away")
+    ],
+    // Use to fade layers in/out as the cursor (or any "view rotation"
+    // proxy) moves. Wire Sim Light → split → xy → makeVec2 (or the
+    // cursor's centeredUV offset) into `offset`. Multiply a layer by
+    // `near` to keep it visible only while looking head-on; by `far`
+    // for a sheen / edge layer that only appears at glancing angles.
+    generate:(ctx) => {
+      const d = ctx.tmp('vmd');
+      const f = ctx.tmp('vmf');
+      return {
+        setup:
+`float ${d} = length(${ctx.inputs.offset});
+float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max(${ctx.inputs.softness}, 0.001), ${d});`,
+        exprs:{
+          far:  f,
+          near: `(1.0 - ${f})`,
+        },
+      };
+    },
+  },
   shadow: {
     category:'Effect', title:'Shadow', desc:'raycast heightfield shadow factor (0=shadowed, 1=lit)',
     inputs:[
@@ -1793,6 +1840,61 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
         exprs:{
           out:`clamp(mix(${a}, ${blended}, clamp(${t}, 0.0, 1.0)), vec3(0.0), vec3(1.0))`,
         },
+      };
+    },
+  },
+
+  /* ---- layered material compositor ---- */
+  layerStack: {
+    category:'Module', title:'Layer Stack', desc:'composite N material layers with per-layer blend mode + opacity',
+    // Dynamic schema: 1 base input + numLayers layer inputs. Output is a
+    // single composited vec3. Per-layer opacity (0..1) and blend mode are
+    // params edited inline on the node body.
+    inputs: (node) => {
+      const n = (node && node.params && node.params.numLayers) || 0;
+      const list = [{ name: 'base', type: 'vec3', default: [0, 0, 0] }];
+      for (let i = 0; i < n; i++){
+        list.push({ name: `layer${i}`, type: 'vec3', default: [0, 0, 0] });
+      }
+      return list;
+    },
+    outputs: () => [{ name: 'out', type: 'vec3' }],
+    customBody: 'layerStack',
+    params: [
+      { name: 'numLayers', kind: 'hidden', default: 2 },
+      { name: 'opacity',   kind: 'hidden', default: [1.0, 1.0] },
+      { name: 'modes',     kind: 'hidden', default: ['normal', 'multiply'] },
+    ],
+    // For each layer i, blend `result` (so far) with `layer_i` using mode_i,
+    // then lerp by opacity_i. Mirrors the inline blend node semantics.
+    generate: (ctx) => {
+      const numL    = (ctx.node.params.numLayers) || 0;
+      const opacity = Array.isArray(ctx.node.params.opacity) ? ctx.node.params.opacity : [];
+      const modes   = Array.isArray(ctx.node.params.modes)   ? ctx.node.params.modes   : [];
+
+      let result = ctx.inputs.base;
+      const setup = [];
+      for (let i = 0; i < numL; i++){
+        const layerExpr = ctx.inputs[`layer${i}`];
+        const mode = modes[i] || 'normal';
+        const op   = opacity[i] != null ? opacity[i] : 1.0;
+        let blended;
+        switch (mode){
+          case 'multiply':   blended = `(${result} * ${layerExpr})`; break;
+          case 'screen':     blended = `(vec3(1.0) - (vec3(1.0) - ${result}) * (vec3(1.0) - ${layerExpr}))`; break;
+          case 'add':        blended = `(${result} + ${layerExpr})`; break;
+          case 'darken':     blended = `min(${result}, ${layerExpr})`; break;
+          case 'lighten':    blended = `max(${result}, ${layerExpr})`; break;
+          case 'difference': blended = `abs(${result} - ${layerExpr})`; break;
+          default:           blended = layerExpr;   // normal = replace
+        }
+        const tmp = ctx.tmp(`ls${i}`);
+        setup.push(`vec3 ${tmp} = clamp(mix(${result}, ${blended}, clamp(${glslNum(op)}, 0.0, 1.0)), vec3(0.0), vec3(1.0));`);
+        result = tmp;
+      }
+      return {
+        setup: setup.join('\n'),
+        exprs: { out: result },
       };
     },
   },

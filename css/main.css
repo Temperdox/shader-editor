@@ -614,6 +614,19 @@ body.light-bulb-active{ cursor:none; }
   border-radius:2px;
 }
 
+/* ---- Layer Stack (material compositor) ---- */
+.layer-stack-body{ min-width:280px; }
+.layer-stack-row .ls-opacity{
+  width:42px;
+  font-size:10px;
+  padding:2px 4px;
+}
+.layer-stack-row .ls-mode{
+  font-size:10px;
+  padding:2px 4px;
+  max-width:88px;
+}
+
 /* ---- Flag module (patch bay with internal wires) ---- */
 .node-body.flag-body{
   min-width:340px;

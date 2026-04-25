@@ -76,6 +76,26 @@ function renderNode(node){
     return el;
   }
 
+  // Layer Stack — dynamic input rows + per-layer opacity/mode controls.
+  if (def.customBody === 'layerStack'){
+    renderLayerStackBody(node, el, body);
+    attachNodeDrag(el, node);
+    attachSocketHandlers(el);
+    el.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      const multi = e.shiftKey || e.ctrlKey || e.metaKey;
+      if (multi){
+        if (state.selected.has(node.id)) state.selected.delete(node.id);
+        else                              state.selected.add(node.id);
+      } else if (!state.selected.has(node.id)){
+        state.selected.clear();
+        state.selected.add(node.id);
+      }
+      refreshSelectionClasses();
+    });
+    return el;
+  }
+
   // param rows (numbers, colors, vec2, selects, segmented toggles, images).
   // Each param can opt into conditional display via `visibleWhen(params)` —
   // used by heightMap / normalMap to show procedural params in dynamic mode
@@ -1289,4 +1309,161 @@ function startFlagInternalWire(node, startSock, zone, svg){
   };
   window.addEventListener('pointermove', onMove);
   window.addEventListener('pointerup',   onUp);
+}
+
+/* ================== Layer Stack rendering ==================
+   A material compositor: one base input + N layer inputs, each layer
+   carrying its own opacity slider and blend-mode dropdown right on the
+   node body. Output is a single composited vec3.
+   layerStack params:
+     numLayers : int    — number of stacked layers (1..6)
+     opacity   : float[] per-layer 0..1
+     modes     : string[] per-layer blend mode
+*/
+const LAYER_BLEND_MODES = ['normal', 'multiply', 'screen', 'add', 'darken', 'lighten', 'difference'];
+
+function renderLayerStackBody(node, nodeEl, bodyEl){
+  bodyEl.classList.add('layer-stack-body');
+  const numL = node.params.numLayers || 0;
+
+  // toolbar — +/- layer count
+  const toolbar = document.createElement('div');
+  toolbar.className = 'flag-toolbar';
+  toolbar.innerHTML = `
+    <span class="flag-toolbar-group">
+      LAYERS
+      <button type="button" class="flag-tb-btn" data-act="dec">−</button>
+      <span class="flag-tb-count">${numL}</span>
+      <button type="button" class="flag-tb-btn" data-act="inc">+</button>
+    </span>
+  `;
+  toolbar.addEventListener('pointerdown', e => e.stopPropagation());
+  for (const btn of toolbar.querySelectorAll('.flag-tb-btn')){
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if      (act === 'inc') layerStackSetCount(node, (node.params.numLayers || 0) + 1);
+      else if (act === 'dec') layerStackSetCount(node, (node.params.numLayers || 0) - 1);
+    });
+  }
+  bodyEl.appendChild(toolbar);
+
+  // Base input row — always present
+  bodyEl.appendChild(makeLayerStackRow(node, 'base', 'base', 'vec3', null));
+
+  // Layer rows
+  const opacity = Array.isArray(node.params.opacity) ? node.params.opacity : [];
+  const modes   = Array.isArray(node.params.modes)   ? node.params.modes   : [];
+  for (let i = 0; i < numL; i++){
+    bodyEl.appendChild(makeLayerStackRow(node, `layer${i}`, `layer ${i}`, 'vec3', {
+      index: i,
+      opacity: opacity[i] != null ? opacity[i] : 1.0,
+      mode:    modes[i] || 'normal',
+    }));
+  }
+
+  // Output row
+  const outRow = document.createElement('div');
+  outRow.className = 'node-row';
+  const outLabel = document.createElement('div');
+  outLabel.className = 'row-label right';
+  outLabel.textContent = 'out (vec3)';
+  outRow.appendChild(outLabel);
+  const outSock = document.createElement('div');
+  outSock.className = 'socket out';
+  outSock.dataset.nodeId   = node.id;
+  outSock.dataset.socket   = 'out';
+  outSock.dataset.dir      = 'out';
+  outSock.dataset.sockType = 'vec3';
+  if (isSocketConnected(node.id, 'out', 'out')) outSock.classList.add('connected');
+  outRow.appendChild(outSock);
+  bodyEl.appendChild(outRow);
+}
+
+function makeLayerStackRow(node, sockName, labelText, sockType, layerCtl){
+  const row = document.createElement('div');
+  row.className = 'node-row layer-stack-row';
+
+  const sock = document.createElement('div');
+  sock.className = 'socket in';
+  sock.dataset.nodeId   = node.id;
+  sock.dataset.socket   = sockName;
+  sock.dataset.dir      = 'in';
+  sock.dataset.sockType = sockType;
+  if (isSocketConnected(node.id, 'in', sockName)) sock.classList.add('connected');
+  row.appendChild(sock);
+
+  const label = document.createElement('div');
+  label.className = 'row-label';
+  label.textContent = labelText;
+  row.appendChild(label);
+
+  if (layerCtl){
+    // opacity number input
+    const opIn = document.createElement('input');
+    opIn.type = 'number';
+    opIn.className = 'val ls-opacity';
+    opIn.min = '0';
+    opIn.max = '1';
+    opIn.step = '0.05';
+    opIn.value = layerCtl.opacity;
+    opIn.addEventListener('pointerdown', e => e.stopPropagation());
+    opIn.addEventListener('input', () => {
+      const v = parseFloat(opIn.value);
+      const arr = Array.isArray(node.params.opacity) ? [...node.params.opacity] : [];
+      while (arr.length <= layerCtl.index) arr.push(1.0);
+      arr[layerCtl.index] = isFinite(v) ? v : 1.0;
+      node.params.opacity = arr;
+      scheduleRecompile();
+    });
+    opIn.addEventListener('change', () => pushHistory());
+    row.appendChild(opIn);
+
+    // mode dropdown
+    const sel = document.createElement('select');
+    sel.className = 'val-select ls-mode';
+    sel.addEventListener('pointerdown', e => e.stopPropagation());
+    for (const m of LAYER_BLEND_MODES){
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      sel.appendChild(o);
+    }
+    sel.value = layerCtl.mode;
+    sel.addEventListener('change', () => {
+      const arr = Array.isArray(node.params.modes) ? [...node.params.modes] : [];
+      while (arr.length <= layerCtl.index) arr.push('normal');
+      arr[layerCtl.index] = sel.value;
+      node.params.modes = arr;
+      scheduleRecompile();
+      pushHistory();
+    });
+    row.appendChild(sel);
+  }
+
+  return row;
+}
+
+function layerStackSetCount(node, target){
+  target = Math.max(0, Math.min(6, Math.floor(target)));
+  const prev = node.params.numLayers || 0;
+  if (target === prev) return;
+  node.params.numLayers = target;
+
+  // Trim arrays + drop external connections to removed sockets
+  if (target < prev){
+    const dropped = new Set();
+    for (let i = target; i < prev; i++) dropped.add(`layer${i}`);
+    state.connections = state.connections.filter(c => !(c.to.nodeId === node.id && dropped.has(c.to.socket)));
+  }
+  const op = Array.isArray(node.params.opacity) ? [...node.params.opacity] : [];
+  const md = Array.isArray(node.params.modes)   ? [...node.params.modes]   : [];
+  while (op.length < target) op.push(1.0);
+  while (md.length < target) md.push('normal');
+  op.length = target;
+  md.length = target;
+  node.params.opacity = op;
+  node.params.modes   = md;
+
+  renderAll();
+  scheduleRecompile();
+  pushHistory();
 }
