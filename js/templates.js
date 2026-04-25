@@ -370,68 +370,63 @@ function tplBlendDemo(){
   c(blend, 'out', out, 'color');
 }
 
-/* ---------------- Brick Wall — static diffuse + normal map pair ----
- * Uses real textures shipped in `assets/textures/brick-wall/`. Flow:
+/* ---------------- Brick Wall — diffuse + normal map, lit by Sim Light ----
+ * Uses real textures from `assets/textures/brick-wall/`. The normal map drives
+ * Lambert against the cursor-driven Sim Light, so toggling the Lighting button
+ * lets you sweep a virtual light across the wall — the bumps in the brick
+ * faces and recessed mortar shade dynamically as the cursor moves.
  *   UV → Texture (diffuse) → rgb
- *   UV → Normal Map (static) → normal → Split → .b (up-facing coefficient)
- *   mix(black, rgb, nz) → shaded diffuse, so bricks catch "overhead light"
- * The spec map is intentionally not wired up — the template stays simple,
- * and users can add another Texture node pointing at the spec PNG and blend
- * its `r` output into the final color to experiment.
+ *   UV → Normal Map (static) → normal
+ *   Lambert(normal, simLight) → float diffuse coefficient
+ *   mix(black, diff.rgb, lamb) → shaded color
  */
 function tplBrickWall(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  // Relative paths to the PNGs (TGA originals live under the same folder in
-  // source/). Works for local file:// opens thanks to the crossOrigin guard
-  // in textures.js.
   const DIFF_URL = 'assets/textures/brick-wall/diffuse.png';
   const NORM_URL = 'assets/textures/brick-wall/normal.png';
 
-  const uv = n('uv', -780, 40);
+  const uv  = n('uv',         -820,   60);
+  const cuv = n('centeredUV', -820,  -80);   // for sim-light per-fragment pos
+  const simL = n('simLight',  -820, -240);
 
-  // generic Texture node for the albedo — rgb output drives the surface color
-  const diff = n('texture', -480, -80, { imageUrl: DIFF_URL });
+  const diff = n('texture',   -500, -100, { imageUrl: DIFF_URL });
+  const norm = n('normalMap', -500,  220, { mode: 'static', imageUrl: NORM_URL });
 
-  // Normal Map in static mode — reuses the existing node, imageUrl param
-  const norm = n('normalMap', -480, 200, {
-    mode: 'static',
-    imageUrl: NORM_URL,
-  });
+  // Lambert with a generous ambient floor so the dark side isn't pitch-black
+  // even when the cursor is far away.
+  const lamb = n('lambert', -180, 120, {}, { ambient: 0.25 });
 
-  // Split the normal to pull out the Z component ("how up-facing is this pixel?")
-  const split = n('splitVec3', -140, 200);
+  // shaded diffuse = mix(black, diff.rgb, lamb) = diff * lamb
+  const black = n('color', -180, -100, { rgb: [0, 0, 0] });
+  const lit   = n('mix',    220,   40);
 
-  // Fake overhead light: mix(black, diffuse, normal.z). Flat bricks stay lit,
-  // recessed mortar darkens automatically because its normal tilts off-axis.
-  const black = n('color',  -140, -280, { rgb: [0, 0, 0] });
-  const shade = n('mix',     220,   40);
+  const out = n('output', 540, 40);
 
-  const out   = n('output',  540,   40);
+  c(uv,  'out', diff, 'p');
+  c(uv,  'out', norm, 'p');
+  c(cuv, 'p',   simL, 'pos');
 
-  c(uv, 'out', diff, 'p');
-  c(uv, 'out', norm, 'p');
+  c(norm, 'normal', lamb, 'normal');
+  c(simL, 'out',    lamb, 'lightDir');
 
-  c(norm, 'normal', split, 'v');
+  c(black, 'out', lit, 'a');
+  c(diff,  'rgb', lit, 'b');
+  c(lamb,  'out', lit, 't');
 
-  c(black, 'out', shade, 'a');
-  c(diff,  'rgb', shade, 'b');
-  c(split, 'b',   shade, 't');
-
-  c(shade, 'out', out, 'color');
+  c(lit, 'out', out, 'color');
 }
 
-/* ---------------- Brick Wall + Spec — adds a specular-highlight pass ----
- * Extends the Brick Wall template: same diffuse + normal pipeline, plus a
- * third Texture node sampling the spec map. Its `.r` output (single-channel
- * shininess) is promoted to a gray vec3 and screen-blended onto the shaded
- * diffuse at low amount — a cheap fake specular highlight that makes the
- * brick faces catch light and leaves the mortar matte (because the mortar
- * is dark in the spec map).
- *
- * Try toggling the Blend mode from `screen` → `add` for a hotter look, or
- * raising the Blend amount for chrome-y mortar.
+/* ---------------- Brick Wall + Spec — diffuse + normal + spec, lit ----
+ * Extends Brick Wall: same Lambert-against-Sim-Light setup as a base, plus
+ * a third Texture node sampling the spec map. The spec mask is multiplied
+ * by pow(lambert, 16) so the highlight only fires where the surface is
+ * BOTH shiny (per the spec map) AND directly facing the cursor light — a
+ * cheap Blinn-ish phong without needing a full reflect-and-dot chain. The
+ * highlight is then promoted to gray and additively blended onto the lit
+ * diffuse, so moving the cursor sweeps a glossy hot spot across the brick
+ * faces while the mortar (dark in the spec map) stays matte.
  */
 function tplBrickWallSpec(){
   _clearGraph();
@@ -441,49 +436,55 @@ function tplBrickWallSpec(){
   const NORM_URL = 'assets/textures/brick-wall/normal.png';
   const SPEC_URL = 'assets/textures/brick-wall/spec.png';
 
-  const uv = n('uv', -820, 40);
+  const uv   = n('uv',         -940,   80);
+  const cuv  = n('centeredUV', -940,  -60);
+  const simL = n('simLight',   -940, -220);
 
-  // Diffuse + Normal (same structure as tplBrickWall)
-  const diff  = n('texture',   -520, -100, { imageUrl: DIFF_URL });
-  const norm  = n('normalMap', -520,  180, {
-    mode: 'static',
-    imageUrl: NORM_URL,
-  });
-  const split = n('splitVec3', -200,  180);
+  const diff = n('texture',    -620, -100, { imageUrl: DIFF_URL });
+  const norm = n('normalMap',  -620,  200, { mode: 'static', imageUrl: NORM_URL });
+  const spec = n('texture',    -620,  440, { imageUrl: SPEC_URL });
 
-  const black = n('color',     -200, -320, { rgb: [0, 0, 0] });
-  const shade = n('mix',        140,  -20);   // shaded = mix(black, diff.rgb, normal.z)
+  // Diffuse lighting
+  const lamb  = n('lambert', -300, 100, {}, { ambient: 0.22 });
+  const black = n('color',   -300, -100, { rgb: [0, 0, 0] });
+  const lit   = n('mix',       60,   20);   // mix(black, diff.rgb, lamb)
 
-  // Spec pass — third Texture node reading the spec map as a single-channel mask
-  const spec  = n('texture',   -520, 420, { imageUrl: SPEC_URL });
-  const gray  = n('grayscale', -200, 420);    // float spec.r → vec3(r,r,r)
+  // Specular highlight: pow(lambert, 16) × spec.r → bright spot only on
+  // shiny pixels facing the cursor light. Higher exponent = tighter spot.
+  const sharp   = n('float',    -300, 320, { value: 16.0 });
+  const lambPow = n('pow',        60,  220);   // pow(lamb, 16)
+  const specHi  = n('multiply',  380,  280);   // pow(lamb,16) * spec.r
+  const specGray= n('grayscale', 700,  280);   // float → vec3 gray
 
-  // Cheap specular: screen-blend the spec layer onto the shaded diffuse.
-  // amount=0.35 is the "low amount" sweet spot; bumping to ~0.7 makes the
-  // bricks look wet.
-  const blend = n('blend',      460,   40, { mode: 'screen' }, { amount: 0.35 });
+  // Final = lit diffuse + spec highlight (additive)
+  const final = n('blend',     1020,  100, { mode: 'add' });
+  const out   = n('output',    1340,  100);
 
-  const out   = n('output',     760,   40);
+  c(uv,  'out', diff, 'p');
+  c(uv,  'out', norm, 'p');
+  c(uv,  'out', spec, 'p');
+  c(cuv, 'p',   simL, 'pos');
 
-  // wiring
-  c(uv, 'out', diff, 'p');
-  c(uv, 'out', norm, 'p');
-  c(uv, 'out', spec, 'p');
+  c(norm, 'normal', lamb, 'normal');
+  c(simL, 'out',    lamb, 'lightDir');
 
-  c(norm, 'normal', split, 'v');
+  // lit diffuse
+  c(black, 'out', lit, 'a');
+  c(diff,  'rgb', lit, 'b');
+  c(lamb,  'out', lit, 't');
 
-  c(black, 'out', shade, 'a');
-  c(diff,  'rgb', shade, 'b');
-  c(split, 'b',   shade, 't');
+  // specular highlight build-up
+  c(lamb,    'out', lambPow, 'x');
+  c(sharp,   'out', lambPow, 'e');
+  c(spec,    'r',   specHi,  'a');
+  c(lambPow, 'out', specHi,  'b');
+  c(specHi,  'out', specGray, 'x');
 
-  c(spec, 'r',   gray,  'x');
+  // additive composite
+  c(lit,      'out', final, 'a');
+  c(specGray, 'out', final, 'b');
 
-  c(shade, 'out', blend, 'a');
-  c(gray,  'out', blend, 'b');
-  // blend.amount is left unconnected — the template seeded the socket default
-  // to 0.35 above, so the inline editor on the node shows "0.35" out of the box.
-
-  c(blend, 'out', out, 'color');
+  c(final, 'out', out, 'color');
 }
 
 /* ---------------- Radial Pulse — animated distance-to-center gradient ---------------- */
