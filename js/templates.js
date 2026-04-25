@@ -1642,87 +1642,96 @@ function tplBloomStar(){
  *      without rewiring; right-click an internal wire to remove it; +/- on
  *      the node to add more lanes. Great for A/B testing lighting terms.
  */
+/* Lighting Test — side-by-side comparison of World Normal vs Normal Map.
+ *   Left half  → World Normal (built-in noise normal from the vertex shader)
+ *   Right half → Normal Map node (procedural FBM heightfield → finite-diff)
+ * Both feed the SAME Lambert + Sim Light + colour ramp so the only difference
+ * is the normal source. The Flag has two outputs (one per lane) — toggle the
+ * passthrough on either to disable that side and see the other in isolation.
+ * Move the cursor (Lighting button on) to drag the highlight across both.
+ */
 function tplLightingTest(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  // --- inputs ---
-  const cuv  = n('centeredUV',  -1240,  -200);
-  const nor  = n('worldNormal', -940, -120);
-  const simL = n('simLight',    -940,   40);
-  const view = n('viewDir',     -940,  180);
+  // --- inputs (shared) ---
+  const cuv  = n('centeredUV',  -1280,   -40);
+  const time = n('time',        -1280,   120, { scale: 0.4 });
+  const simL = n('simLight',    -1280,   280);
 
-  // --- shading terms ---
-  // Lambert: float in [ambient, 1] — the diffuse N·L term against the cursor
-  // light, with an ambient floor so the dark side never goes pure black.
-  const lamb = n('lambert', -640, -120, {}, { ambient: 0.15 });
-  // Fresnel: float in [0, 1] — silhouette factor against the view direction.
-  const fres = n('fresnel', -640,   60, {}, { power: 1.5 });
+  // --- two competing normal sources ---
+  const worldN = n('worldNormal', -960, -160);
+  const normM  = n('normalMap',   -960,   40, { scale: 2.5, strength: 3.0, epsilon: 0.005 });
 
-  // --- colour stops ---
-  // Diffuse body: lerp from a dark cool to a warm-bright using the Lambert
-  // factor. Brightest channel of `lit` is 0.55, so summing all three lanes
-  // (diffuse + rim + ambient) tops out around (0.95, 1, 0.95) — visible
-  // detail without hitting clamp(0,1) and going pure white.
-  const dark = n('color', -640,  220, { rgb: [0.04, 0.06, 0.10] });   // shadow tint
-  const lit  = n('color', -640,  360, { rgb: [0.55, 0.45, 0.30] });   // warm midtone
-  const lambBody = n('mix', -340, 130);                                // mix(dark, lit, lamb)
+  // --- one Lambert per lane, both lit by the same Sim Light ---
+  const lambW = n('lambert', -640, -160, {}, { ambient: 0.18 });
+  const lambN = n('lambert', -640,   80, {}, { ambient: 0.18 });
 
-  // Rim contribution: kept low so it adds an edge highlight without
-  // saturating the body colour.
-  const rimC    = n('color', -640, 500, { rgb: [0.30, 0.55, 0.85] });
-  const rimLane = n('mix',   -340, 320);                               // mix(black, rimC, fres)
+  // --- shared colour ramp (so any visible difference is the NORMAL,
+  //     not different palettes) ---
+  const dark = n('color', -640,  280, { rgb: [0.05, 0.07, 0.10] });
+  const lit  = n('color', -640,  420, { rgb: [0.85, 0.78, 0.62] });
 
-  // Subtle ambient floor — a very dark blue lane so even with the diffuse
-  // and rim toggled OFF inside the Flag, you still see the surface tint.
-  const ambient = n('color', -340, 480, { rgb: [0.05, 0.06, 0.09] });
+  const litBodyW = n('mix', -300, -100);   // World-Normal lit body
+  const litBodyN = n('mix', -300,  140);   // Normal-Map  lit body
 
-  // --- Flag patch bay: 3 light-component lanes → 1 summed body colour ---
-  // Defaults: all three lanes wired into out0, passthrough on. Toggle any
-  // input lane via the toggle on out0, or right-click an internal wire to
-  // remove it, to A/B test how each contribution shapes the final image.
-  const flag = n('flag', 0, 200, {
-    numInputs:  3,
-    numOutputs: 1,
-    enabled:    [true],
+  // --- Flag: 2 inputs (one per lane) → 2 outputs (one per lane) ---
+  // Default: in0→out0 and in1→out1, both passthroughs on. Toggling
+  // out0's passthrough kills the WORLD lane; toggling out1's kills the
+  // NORMAL MAP lane. Since each output drives one half of the screen,
+  // toggling one off makes that half black and isolates the other.
+  const flag = n('flag', 40, 0, {
+    numInputs:  2,
+    numOutputs: 2,
+    enabled:    [true, true],
     wires: [
-      { from: 0, to: 0 },   // diffuse body
-      { from: 1, to: 0 },   // rim
-      { from: 2, to: 0 },   // ambient
+      { from: 0, to: 0 },   // world  → out0
+      { from: 1, to: 1 },   // normal → out1
     ],
   });
 
-  const out = n('output', 440, 200, {
-    bloom:          'on',
-    bloomThreshold: 0.55,
-    bloomRadius:    2.0,
-    bloomIntensity: 0.8,
-  });
+  // --- screen-split mask: 0 on the left, 1 on the right ---
+  const cuvSplit = n('splitVec2',   40, 280);
+  const splitM   = n('smoothstep', 360, 280, {}, { a: -0.005, b: 0.005 });
+
+  // mix(world, normal, splitMask): left = out0 = world, right = out1 = normal
+  const finalMix = n('mix', 700, 60);
+
+  const out = n('output', 1040, 60);
 
   // --- wiring ---
-  // Per-fragment point-light direction: feed the centered UV into Sim Light
-  // so each pixel sees the cursor as a local light source, not a single
-  // global vector.
-  c(cuv,  'p',   simL, 'pos');
-  c(nor,  'out', lamb, 'normal');
-  c(simL, 'out', lamb, 'lightDir');
-  c(nor,  'out', fres, 'normal');
-  c(view, 'out', fres, 'view');
+  c(cuv,  'p',   normM, 'p');
+  c(time, 'out', normM, 'time');
+  c(cuv,  'p',   simL,  'pos');
 
-  c(dark, 'out', lambBody, 'a');
-  c(lit,  'out', lambBody, 'b');
-  c(lamb, 'out', lambBody, 't');
+  // Lambert lanes
+  c(worldN, 'out',    lambW, 'normal');
+  c(simL,   'out',    lambW, 'lightDir');
+  c(normM,  'normal', lambN, 'normal');
+  c(simL,   'out',    lambN, 'lightDir');
 
-  c(rimC, 'out', rimLane, 'b');
-  c(fres, 'out', rimLane, 't');
+  // Lit-body lanes (same dark→lit ramp, different lambert sources)
+  c(dark,  'out', litBodyW, 'a');
+  c(lit,   'out', litBodyW, 'b');
+  c(lambW, 'out', litBodyW, 't');
+  c(dark,  'out', litBodyN, 'a');
+  c(lit,   'out', litBodyN, 'b');
+  c(lambN, 'out', litBodyN, 't');
 
-  c(lambBody, 'out', flag, 'in0');
-  c(rimLane,  'out', flag, 'in1');
-  c(ambient,  'out', flag, 'in2');
+  // Flag inputs
+  c(litBodyW, 'out', flag, 'in0');
+  c(litBodyN, 'out', flag, 'in1');
 
-  c(flag, 'out0', out, 'color');
-  // Bloom catches the rim regardless of whether the rim lane is toggled.
-  c(fres, 'out',  out, 'specular');
+  // Screen-split mask
+  c(cuv,      'p',   cuvSplit, 'v');
+  c(cuvSplit, 'x',   splitM,   'x');
+
+  // Final = mix(out0 (world), out1 (normal-map), splitMask)
+  c(flag,   'out0', finalMix, 'a');
+  c(flag,   'out1', finalMix, 'b');
+  c(splitM, 'out',  finalMix, 't');
+
+  c(finalMix, 'out', out, 'color');
 }
 
 /* ---------------- Registry (order = display order in the picker) ---------------- */
