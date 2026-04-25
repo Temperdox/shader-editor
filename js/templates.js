@@ -119,27 +119,35 @@ function tplNormalPreview(){
   c(lit, 'out', out, 'color');
 }
 
-/* Normal + Color — same procedural normal as Normal Preview, but rendered
- * as a real lit surface. Lambert against the cursor-driven Sim Light shades
- * the bumps; turning on the Lighting button moves the highlight live with
- * the cursor. Use this template to see how a normal map interacts with a
- * point light source. */
+/* Normal + Color — same procedural normal as Normal Preview, lit by Sim
+ * Light, with raycast Shadows from the same heightfield. The Shadow node
+ * uses the same FBM heightField helper as Normal Map (with matching
+ * `scale`), so the cast shadows align with the visible bumps perfectly.
+ * Final color = lit body × shadowFactor. With the Shadows button off the
+ * Shadow node short-circuits to 1.0 (no shadowing); preview always casts. */
 function tplNormalLit(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const cuv    = n('centeredUV', -820, -40);
-  const time   = n('time',       -820, 140);
-  const normal = n('normalMap',  -520,  20, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
+  const cuv    = n('centeredUV', -1020, -40);
+  const time   = n('time',       -1020, 140);
+  const normal = n('normalMap',   -720,  20, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
 
-  const simL = n('simLight', -820, 300);
+  const simL = n('simLight', -1020, 300);
 
-  const lamb     = n('lambert', -200,  80, {}, { ambient: 0.18 });
-  const dark     = n('color',   -200, 240, { rgb: [0.05, 0.07, 0.10] });
-  const lit      = n('color',   -200, 380, { rgb: [0.90, 0.82, 0.68] });
-  const lambBody = n('mix',      140, 200);
+  const lamb     = n('lambert', -400,  80, {}, { ambient: 0.18 });
+  const dark     = n('color',   -400, 240, { rgb: [0.05, 0.07, 0.10] });
+  const lit      = n('color',   -400, 380, { rgb: [0.90, 0.82, 0.68] });
+  const lambBody = n('mix',      -60, 200);
 
-  const out = n('output', 500, 200);
+  // Shadow lane: ray-marches the SAME heightField scale (2.5) so cast
+  // shadows match the visible bumps. Multiplies the lit body to darken
+  // pixels that the heightfield occludes from the light.
+  const shad      = n('shadow',    -400, 540, { scale: 2.5, maxDist: 0.4, darkness: 0.35 });
+  const shadGray  = n('grayscale', -60, 540);
+  const shadowed  = n('blend',     280, 360, { mode: 'multiply' });
+
+  const out = n('output', 620, 360);
 
   c(cuv,  'p',   normal, 'p');
   c(time, 'out', normal, 'time');
@@ -152,7 +160,17 @@ function tplNormalLit(){
   c(lit,  'out', lambBody, 'b');
   c(lamb, 'out', lambBody, 't');
 
-  c(lambBody, 'out', out, 'color');
+  // Shadow factor: feed it the same UV + light direction + matching scale.
+  c(cuv,  'p',   shad, 'pos');
+  c(simL, 'out', shad, 'lightDir');
+  c(time, 'out', shad, 'time');
+  c(shad, 'out', shadGray, 'x');
+
+  // lit body × shadowFactor (multiplicative blend at full amount).
+  c(lambBody, 'out', shadowed, 'a');
+  c(shadGray, 'out', shadowed, 'b');
+
+  c(shadowed, 'out', out, 'color');
 }
 
 /* ---------------- Height Field — visualizes heightMap as grayscale ---------------- */

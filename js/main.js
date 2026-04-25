@@ -30,6 +30,17 @@ $('#simLightBtn').addEventListener('click', () => {
   btn.classList.toggle('active', on);
 });
 
+// Shadows — toggles `body.shadows-on`. The renderer reads that class each
+// frame to decide whether u_shadows = 1.0 (raycast) or 0.0 (skip). Preview
+// always sends 1.0 regardless. Shaders only react to it via the Shadow node.
+$('#shadowsBtn').addEventListener('click', () => {
+  const on = document.body.classList.toggle('shadows-on');
+  const btn = $('#shadowsBtn');
+  const label = btn.querySelector('.shadows-label');
+  if (label) label.textContent = on ? 'On' : 'Shadows';
+  btn.classList.toggle('active', on);
+});
+
 // Lightbulb cursor follower — only visible when sim-lighting is on AND the
 // cursor is over the bare shader background (not over the editor UI, not
 // over the preview card). When over UI / in preview, the native cursor is

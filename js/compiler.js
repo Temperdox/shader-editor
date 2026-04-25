@@ -188,6 +188,10 @@ uniform vec2  u_resolution;
 // Sim-lighting uniform: vec3 light direction that tracks the cursor when the
 // Lighting button is active, or (0, 0, 1) when off. See renderer.js.
 uniform vec3  u_simLight;
+// Shadow toggle — driven by the Shadows button in the editor (always 1.0
+// in preview mode). Read by the Shadow node to skip the raymarch loop and
+// return 1.0 (no shadow) when 0.0.
+uniform float u_shadows;
 // Test-surface varying: the VS computes a procedural 3D normal from a noise
 // height field and passes it here. Reads (0, 0, 1) when the Surface button
 // is off. See renderer.js's vertex shader.

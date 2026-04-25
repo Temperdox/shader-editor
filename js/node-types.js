@@ -1577,6 +1577,63 @@ float ${d} = abs(${f} - 0.5);`,
       };
     },
   },
+  shadow: {
+    category:'Effect', title:'Shadow', desc:'raycast heightfield shadow factor (0=shadowed, 1=lit)',
+    inputs:[
+      {name:'pos',      type:'vec2',  default:[0, 0]},
+      {name:'lightDir', type:'vec3',  default:[0, 0, 1]},
+      {name:'time',     type:'float', default:0.0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    params:[
+      {name:'scale',    kind:'number', default:2.5,  min:0.1, max:20,  step:0.1},
+      {name:'maxDist',  kind:'number', default:0.4,  min:0.05, max:2,  step:0.05},
+      {name:'darkness', kind:'number', default:0.35, min:0,    max:1,  step:0.05},
+    ],
+    helpers:['snoise', 'fbm', 'heightField'],
+    // Raymarches the SAME heightField helper that Normal Map (dynamic) uses,
+    // so shadows match procedural FBM bumps perfectly when you give both
+    // nodes the same `scale`. Each fragment walks `maxDist` along the
+    // light direction projected onto the surface, sampling the height at
+    // each step. If any sample sits above the ray's expected height at
+    // that distance, the fragment is shadowed → returns `darkness` (0=full
+    // shadow, default 0.35 = 65% darker). Skipped entirely when the
+    // Shadows button is off (u_shadows < 0.5) — returns 1.0.
+    extensions:[],   // no derivatives needed
+    generate:(ctx) => {
+      const result = ctx.tmp('shRes');
+      const startH = ctx.tmp('shH0');
+      const lxy    = ctx.tmp('shLxy');
+      const tt     = ctx.tmp('shT');
+      const xy     = ctx.tmp('shXy');
+      const rh     = ctx.tmp('shRh');
+      const gh     = ctx.tmp('shGh');
+      const sc = glslNum(ctx.params.scale);
+      const md = glslNum(ctx.params.maxDist);
+      const dk = glslNum(ctx.params.darkness);
+      return {
+        setup:
+`float ${result} = 1.0;
+if (u_shadows > 0.5) {
+  float ${startH} = heightField(${ctx.inputs.pos}, ${sc}, ${ctx.inputs.time});
+  float ${lxy} = length(${ctx.inputs.lightDir}.xy);
+  if (${lxy} > 0.001) {
+    // Single declarations outside the loop — GLSL ES 1.00 disallows
+    // re-declaring a name in inner scopes on some drivers.
+    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh};
+    for (int _shi = 1; _shi <= 12; _shi++) {
+      ${tt} = (float(_shi) / 12.0) * ${md};
+      ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
+      ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
+      ${gh} = heightField(${xy}, ${sc}, ${ctx.inputs.time});
+      if (${gh} > ${rh}) { ${result} = ${dk}; break; }
+    }
+  }
+}`,
+        exprs:{ out: result },
+      };
+    },
+  },
   lambert: {
     category:'Effect', title:'Lambert', desc:'diffuse lighting: max(N·L, 0)',
     inputs:[

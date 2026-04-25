@@ -47,7 +47,7 @@ const PREVIEW = (() => {
   let gl = null;
   let program = null;
   let posBuf, uvBuf, idxBuf, indexCount = 0;
-  let uTime, uMouse, uRes, uSimLight;
+  let uTime, uMouse, uRes, uSimLight, uShadows;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
@@ -236,6 +236,7 @@ const PREVIEW = (() => {
     uMouse    = gl.getUniformLocation(program, 'u_mouse');
     uRes      = gl.getUniformLocation(program, 'u_resolution');
     uSimLight = gl.getUniformLocation(program, 'u_simLight');
+    uShadows  = gl.getUniformLocation(program, 'u_shadows');
 
     // Same texture binding strategy as renderer.js — one uniform1i per slot
     // at link time, then just rebind the underlying texture in `frame()`.
@@ -317,6 +318,10 @@ const PREVIEW = (() => {
         } else {
           if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
         }
+        // Shadows are ALWAYS enabled in preview mode — the editor toggle
+        // (sim-lighting-on / shadows-on) doesn't apply here. The user said
+        // they want shadows always-on whenever the preview card is shown.
+        if (uShadows) gl.uniform1f(uShadows, 1.0);
         for (const b of textureBindings){
           gl.activeTexture(gl.TEXTURE0 + b.slot);
           gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));

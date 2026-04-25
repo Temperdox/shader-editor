@@ -64,7 +64,7 @@ const renderer = (() => {
   `;
 
   let program = null;
-  let uTime, uMouse, uRes, uSimLight;
+  let uTime, uMouse, uRes, uSimLight, uShadows;
   let mx = 0.5, my = 0.5;
 
   // Texture registry bound to this GL context. One per renderer so each
@@ -175,6 +175,7 @@ const renderer = (() => {
       uMouse    = gl.getUniformLocation(program, 'u_mouse');
       uRes      = gl.getUniformLocation(program, 'u_resolution');
       uSimLight = gl.getUniformLocation(program, 'u_simLight');
+      uShadows  = gl.getUniformLocation(program, 'u_shadows');
 
       // Resolve each sampler2D uniform location and lock it to a texture slot.
       // uniform1i only needs to be set once per program — the frame loop just
@@ -260,6 +261,11 @@ const renderer = (() => {
           } else {
             if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
           }
+          // Shadow toggle — controlled by the bottom-right Shadows button.
+          // When off, the Shadow node short-circuits its raymarch loop and
+          // returns 1.0 (no shadow). Preview always sets this to 1.0.
+          const shadowsOn = document.body.classList.contains('shadows-on');
+          if (uShadows) gl.uniform1f(uShadows, shadowsOn ? 1.0 : 0.0);
           for (const b of textureBindings){
             gl.activeTexture(gl.TEXTURE0 + b.slot);
             gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
