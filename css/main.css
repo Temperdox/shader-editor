@@ -139,7 +139,12 @@ body::after{
   justify-content:space-between;
   padding:14px 18px;
   border-bottom:1px solid var(--hairline);
-  background:linear-gradient(180deg, rgba(255,255,255,.04), transparent);
+  /* Match the node background so the toolbar reads as a solid bar against
+     the busy shader background — keeps the buttons legible. */
+  background:var(--node-bg);
+  backdrop-filter:blur(8px);
+  -webkit-backdrop-filter:blur(8px);
+  border-radius:22px 22px 0 0;
 }
 .modal-title{
   font-family:'Fraunces', serif;
