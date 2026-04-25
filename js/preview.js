@@ -125,7 +125,10 @@ const PREVIEW = (() => {
       float hR = _vsHeight(a_position + vec2(e, 0.0));
       float hU = _vsHeight(a_position + vec2(0.0, e));
       v_surfaceNormal = normalize(vec3((hC - hR) / e, (hC - hU) / e, 1.0));
-      gl_Position = vec4(a_position, 0.0, 1.0);
+      // Visible 3D Y-shift, damped near the canvas edges so the mesh stays
+      // flush with the borders. Collapses to a flat quad when u_surface=0.
+      float edgeFalloff = 1.0 - smoothstep(0.7, 1.0, abs(a_position.y));
+      gl_Position = vec4(a_position.x, a_position.y + hC * 0.35 * edgeFalloff, 0.0, 1.0);
     }
   `;
 

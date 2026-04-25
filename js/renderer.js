@@ -67,7 +67,15 @@ const renderer = (() => {
       float hR = _vsHeight(a_position + vec2(e, 0.0));
       float hU = _vsHeight(a_position + vec2(0.0, e));
       v_surfaceNormal = normalize(vec3((hC - hR) / e, (hC - hU) / e, 1.0));
-      gl_Position = vec4(a_position, 0.0, 1.0);
+      // Visible 3D: shift Y by the height value so the deformation actually
+      // shows up on screen as a bumpy/wavy mesh, not just as varying normals
+      // (which would be invisible on a flat-shaded fragment shader). When
+      // u_surface=0 the height is 0 so this collapses back to a flat quad
+      // and existing graphs render identically to before. The edgeFalloff
+      // damps the shift near the screen borders so the mesh stays flush
+      // with the canvas edges instead of leaving gaps.
+      float edgeFalloff = 1.0 - smoothstep(0.7, 1.0, abs(a_position.y));
+      gl_Position = vec4(a_position.x, a_position.y + hC * 0.35 * edgeFalloff, 0.0, 1.0);
     }
   `;
 

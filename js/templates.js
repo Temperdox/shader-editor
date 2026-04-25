@@ -1625,70 +1625,78 @@ function tplLightingTest(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  // --- inputs for the three lighting lanes ---
-  const nor   = n('worldNormal', -1240, -140);
-  const simL  = n('simLight',    -1240,   20);
-  const view  = n('viewDir',     -1240,  180);
-  const tSlow = n('time',        -1240,  340, { scale: 0.2 });
+  // --- inputs ---
+  const nor  = n('worldNormal', -940, -120);
+  const simL = n('simLight',    -940,   40);
+  const view = n('viewDir',     -940,  180);
 
-  // --- lighting terms ---
-  const lamb = n('lambert',     -900, -140, {}, { ambient: 0.2 });  // N·L (float)
-  const fres = n('fresnel',     -900,   40, {}, { power: 1.4 });    // rim (float)
-  const irid = n('iridescence', -900,  220, {}, { freq: 2.2 });     // rainbow (vec3)
+  // --- shading terms ---
+  // Lambert: float in [ambient, 1] — the diffuse N·L term against the cursor
+  // light, with an ambient floor so the dark side never goes pure black.
+  const lamb = n('lambert', -640, -120, {}, { ambient: 0.15 });
+  // Fresnel: float in [0, 1] — silhouette factor against the view direction.
+  const fres = n('fresnel', -640,   60, {}, { power: 1.5 });
 
-  // Lift the two scalar terms into coloured vec3 contributions.
-  const lambC   = n('color', -600, -180, { rgb: [0.85, 0.92, 1.0] }); // cool diffuse wash
-  const lambLit = n('mix',   -300, -160);                             // mix(black, lambC, lamb)
-  const fresC   = n('color', -600,  40,  { rgb: [1.0, 0.75, 0.45] }); // warm rim tint
-  const fresLit = n('mix',   -300,  60);                              // mix(black, fresC, fres)
+  // --- colour stops ---
+  // Diffuse body: lerp from a dark cool to a warm-bright using the Lambert
+  // factor. Brightest channel of `lit` is 0.55, so summing all three lanes
+  // (diffuse + rim + ambient) tops out around (0.95, 1, 0.95) — visible
+  // detail without hitting clamp(0,1) and going pure white.
+  const dark = n('color', -640,  220, { rgb: [0.04, 0.06, 0.10] });   // shadow tint
+  const lit  = n('color', -640,  360, { rgb: [0.55, 0.45, 0.30] });   // warm midtone
+  const lambBody = n('mix', -340, 130);                                // mix(dark, lit, lamb)
 
-  // --- Flag patch bay: three vec3 lanes summed into a single body colour ---
-  // Defaults: all three inputs wire to out0, all passthroughs on. Toggle
-  // any passthrough (or right-click an internal wire) to isolate one lane.
-  const flag = n('flag', 60, 40, {
+  // Rim contribution: kept low so it adds an edge highlight without
+  // saturating the body colour.
+  const rimC    = n('color', -640, 500, { rgb: [0.30, 0.55, 0.85] });
+  const rimLane = n('mix',   -340, 320);                               // mix(black, rimC, fres)
+
+  // Subtle ambient floor — a very dark blue lane so even with the diffuse
+  // and rim toggled OFF inside the Flag, you still see the surface tint.
+  const ambient = n('color', -340, 480, { rgb: [0.05, 0.06, 0.09] });
+
+  // --- Flag patch bay: 3 light-component lanes → 1 summed body colour ---
+  // Defaults: all three lanes wired into out0, passthrough on. Toggle any
+  // input lane via the toggle on out0, or right-click an internal wire to
+  // remove it, to A/B test how each contribution shapes the final image.
+  const flag = n('flag', 0, 200, {
     numInputs:  3,
     numOutputs: 1,
     enabled:    [true],
     wires: [
-      { from: 0, to: 0 },   // lamb → body
-      { from: 1, to: 0 },   // rim  → body (adds over lamb)
-      { from: 2, to: 0 },   // irid → body (adds over rim)
+      { from: 0, to: 0 },   // diffuse body
+      { from: 1, to: 0 },   // rim
+      { from: 2, to: 0 },   // ambient
     ],
   });
 
-  const out = n('output', 540, 40, {
+  const out = n('output', 440, 200, {
     bloom:          'on',
-    bloomThreshold: 0.3,
-    bloomRadius:    2.5,
-    bloomIntensity: 1.2,
+    bloomThreshold: 0.55,
+    bloomRadius:    2.0,
+    bloomIntensity: 0.8,
   });
 
   // --- wiring ---
-  // Lambert lane (N·L from the cursor-driven sim light)
-  c(nor,   'out', lamb, 'normal');
-  c(simL,  'out', lamb, 'lightDir');
-  c(lambC, 'out', lambLit, 'b');
-  c(lamb,  'out', lambLit, 't');
+  c(nor,  'out', lamb, 'normal');
+  c(simL, 'out', lamb, 'lightDir');
+  c(nor,  'out', fres, 'normal');
+  c(view, 'out', fres, 'view');
 
-  // Fresnel lane (silhouette rim from view dir)
-  c(nor,   'out', fres, 'normal');
-  c(view,  'out', fres, 'view');
-  c(fresC, 'out', fresLit, 'b');
-  c(fres,  'out', fresLit, 't');
+  c(dark, 'out', lambBody, 'a');
+  c(lit,  'out', lambBody, 'b');
+  c(lamb, 'out', lambBody, 't');
 
-  // Iridescence lane — already vec3
-  c(nor,   'out', irid, 'normal');
-  c(tSlow, 'out', irid, 'bias');
+  c(rimC, 'out', rimLane, 'b');
+  c(fres, 'out', rimLane, 't');
 
-  // All three lanes into the Flag's inputs; single summed output to color.
-  c(lambLit, 'out', flag, 'in0');
-  c(fresLit, 'out', flag, 'in1');
-  c(irid,    'out', flag, 'in2');
-  c(flag,   'out0', out,  'color');
+  c(lambBody, 'out', flag, 'in0');
+  c(rimLane,  'out', flag, 'in1');
+  c(ambient,  'out', flag, 'in2');
 
-  // Specular is a float — wire Fresnel directly so bloom catches the rim
-  // regardless of whether the rim lane is toggled on inside the Flag.
-  c(fres,  'out', out, 'specular');
+  c(flag, 'out0', out, 'color');
+  // Bloom catches the rim regardless of whether the rim lane is toggled.
+  c(fres, 'out',  out, 'specular');
 }
 
 /* ---------------- Registry (order = display order in the picker) ---------------- */
