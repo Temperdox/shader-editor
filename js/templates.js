@@ -1767,6 +1767,200 @@ function tplLightingTest(){
   c(fres, 'out',  out, 'specular');
 }
 
+/* Lighting Compare — side-by-side A/B of two normal sources with a
+ * stack of toggleable lighting-driven effects per side.
+ *
+ *   Left half  (World Normal)         Right half (Normal Map)
+ *   ─ Diffuse body (lambert × ramp)   ─ Diffuse body
+ *   ─ Fresnel rim (cool blue)         ─ Fresnel rim
+ *   ─ Iridescence (× 0.5)             ─ Iridescence
+ *   ─ Specular highlight pow(L, 8)    ─ Specular highlight
+ *
+ * Each side has its own Flag (4 inputs → 4 outputs, 1:1 wired). Toggle
+ * any of out0..out3's passthroughs to enable/disable that single effect
+ * on that side. The four outputs per side are summed externally and the
+ * two sides are mixed via a vertical screen-split. Specular bloom comes
+ * from the Fresnel of whichever side is active. */
+function tplLightingCompare(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  // === SHARED INPUTS ===
+  const cuv  = n('centeredUV', -1820, -260);
+  const time = n('time',       -1820, -120, { scale: 0.4 });
+  const simL = n('simLight',   -1820,    20);
+  const view = n('viewDir',    -1820,   160);
+
+  // === NORMAL SOURCES ===
+  const worldN = n('worldNormal', -1500, -440);
+  const normM  = n('normalMap',   -1500,  220, { scale: 2.5, strength: 3.0, epsilon: 0.005 });
+
+  // === SHARED COLOUR STOPS ===
+  const dark  = n('color', -1820,  300, { rgb: [0.05, 0.07, 0.10] });   // shadow base
+  const lit   = n('color', -1820,  440, { rgb: [0.55, 0.48, 0.35] });   // diffuse warm
+  const rimC  = n('color', -1820,  580, { rgb: [0.30, 0.50, 0.75] });   // cool rim
+  const highC = n('color', -1820,  720, { rgb: [0.65, 0.60, 0.45] });   // specular tint
+  const specSharp = n('float', -1820, 860, { value: 8.0 });             // pow exponent
+
+  // -------------------------------------------------------------------
+  //  WORLD NORMAL SIDE
+  // -------------------------------------------------------------------
+  const lambW = n('lambert',     -1180, -440, {}, { ambient: 0.18 });
+  const fresW = n('fresnel',     -1180, -300, {}, { power: 1.5 });
+  const iridW = n('iridescence', -1180, -160, {}, { freq: 2.0 });
+  const powW  = n('pow',         -1180,  -20);                          // pow(lambW, 8)
+
+  // Effect colour build-up
+  const diffW    = n('mix',  -820, -440);   // diffuse body
+  const rimMixW  = n('mix',  -820, -300);   // rim
+  const iridMixW = n('mix',  -820, -160);   // iridescence × 0.5 (default t)
+  const highMixW = n('mix',  -820,  -20);   // specular highlight
+
+  // Per-side Flag — 4 effects in, 4 toggleable outs
+  const flagW = n('flag', -480, -260, {
+    numInputs:  4,
+    numOutputs: 4,
+    enabled:    [true, true, true, true],
+    wires: [
+      { from: 0, to: 0 },   // diff
+      { from: 1, to: 1 },   // rim
+      { from: 2, to: 2 },   // irid
+      { from: 3, to: 3 },   // highlight
+    ],
+  });
+
+  // Sum the 4 outs (additive chain)
+  const sumW1 = n('blend',  -80, -340, { mode: 'add' });   // out0 + out1
+  const sumW2 = n('blend',  220, -340, { mode: 'add' });   // + out2
+  const sumW3 = n('blend',  520, -340, { mode: 'add' });   // + out3
+
+  // -------------------------------------------------------------------
+  //  NORMAL MAP SIDE  (mirrors the World side)
+  // -------------------------------------------------------------------
+  const lambN = n('lambert',     -1180,  220, {}, { ambient: 0.18 });
+  const fresN = n('fresnel',     -1180,  360, {}, { power: 1.5 });
+  const iridN = n('iridescence', -1180,  500, {}, { freq: 2.0 });
+  const powN  = n('pow',         -1180,  640);
+
+  const diffN    = n('mix', -820,  220);
+  const rimMixN  = n('mix', -820,  360);
+  const iridMixN = n('mix', -820,  500);
+  const highMixN = n('mix', -820,  640);
+
+  const flagN = n('flag', -480,  400, {
+    numInputs:  4,
+    numOutputs: 4,
+    enabled:    [true, true, true, true],
+    wires: [
+      { from: 0, to: 0 },
+      { from: 1, to: 1 },
+      { from: 2, to: 2 },
+      { from: 3, to: 3 },
+    ],
+  });
+
+  const sumN1 = n('blend', -80, 320, { mode: 'add' });
+  const sumN2 = n('blend', 220, 320, { mode: 'add' });
+  const sumN3 = n('blend', 520, 320, { mode: 'add' });
+
+  // -------------------------------------------------------------------
+  //  SCREEN SPLIT + FINAL
+  // -------------------------------------------------------------------
+  const cuvSplit = n('splitVec2',  220,  60);
+  const splitM   = n('smoothstep', 520,  60, {}, { a: -0.005, b: 0.005 });
+  const finalMix = n('mix',        820,   0);
+  const out      = n('output',    1180,   0, {
+    bloom:          'on',
+    bloomThreshold: 0.6,
+    bloomRadius:    2.0,
+    bloomIntensity: 0.7,
+  });
+
+  // === WIRING ===
+  c(cuv,  'p',   normM, 'p');
+  c(time, 'out', normM, 'time');
+  c(cuv,  'p',   simL,  'pos');
+
+  // -- World side lighting terms
+  c(worldN, 'out', lambW, 'normal');
+  c(simL,   'out', lambW, 'lightDir');
+  c(worldN, 'out', fresW, 'normal');
+  c(view,   'out', fresW, 'view');
+  c(worldN, 'out', iridW, 'normal');
+  c(time,   'out', iridW, 'bias');
+  c(lambW,  'out', powW,  'x');
+  c(specSharp, 'out', powW, 'e');
+
+  // -- World side effect colours
+  c(dark,  'out', diffW, 'a');
+  c(lit,   'out', diffW, 'b');
+  c(lambW, 'out', diffW, 't');
+  c(rimC,  'out', rimMixW, 'b');
+  c(fresW, 'out', rimMixW, 't');
+  c(iridW, 'out', iridMixW, 'b');                 // Mix t defaults to 0.5 → irid * 0.5
+  c(highC, 'out', highMixW, 'b');
+  c(powW,  'out', highMixW, 't');
+
+  // -- World side flag
+  c(diffW,    'out', flagW, 'in0');
+  c(rimMixW,  'out', flagW, 'in1');
+  c(iridMixW, 'out', flagW, 'in2');
+  c(highMixW, 'out', flagW, 'in3');
+
+  // -- World side sum
+  c(flagW, 'out0', sumW1, 'a');
+  c(flagW, 'out1', sumW1, 'b');
+  c(sumW1, 'out',  sumW2, 'a');
+  c(flagW, 'out2', sumW2, 'b');
+  c(sumW2, 'out',  sumW3, 'a');
+  c(flagW, 'out3', sumW3, 'b');
+
+  // -- Normal Map side lighting terms
+  c(normM, 'normal', lambN, 'normal');
+  c(simL,  'out',    lambN, 'lightDir');
+  c(normM, 'normal', fresN, 'normal');
+  c(view,  'out',    fresN, 'view');
+  c(normM, 'normal', iridN, 'normal');
+  c(time,  'out',    iridN, 'bias');
+  c(lambN, 'out',    powN,  'x');
+  c(specSharp, 'out', powN, 'e');
+
+  // -- Normal Map side effect colours
+  c(dark,  'out', diffN, 'a');
+  c(lit,   'out', diffN, 'b');
+  c(lambN, 'out', diffN, 't');
+  c(rimC,  'out', rimMixN, 'b');
+  c(fresN, 'out', rimMixN, 't');
+  c(iridN, 'out', iridMixN, 'b');
+  c(highC, 'out', highMixN, 'b');
+  c(powN,  'out', highMixN, 't');
+
+  // -- Normal Map side flag
+  c(diffN,    'out', flagN, 'in0');
+  c(rimMixN,  'out', flagN, 'in1');
+  c(iridMixN, 'out', flagN, 'in2');
+  c(highMixN, 'out', flagN, 'in3');
+
+  // -- Normal Map side sum
+  c(flagN, 'out0', sumN1, 'a');
+  c(flagN, 'out1', sumN1, 'b');
+  c(sumN1, 'out',  sumN2, 'a');
+  c(flagN, 'out2', sumN2, 'b');
+  c(sumN2, 'out',  sumN3, 'a');
+  c(flagN, 'out3', sumN3, 'b');
+
+  // -- Split the screen and pick which side renders where
+  c(cuv,      'p',   cuvSplit, 'v');
+  c(cuvSplit, 'x',   splitM,   'x');
+  c(sumW3, 'out',  finalMix, 'a');
+  c(sumN3, 'out',  finalMix, 'b');
+  c(splitM, 'out', finalMix, 't');
+
+  c(finalMix, 'out', out, 'color');
+  // Bloom catches the active side's rim + highlight regardless of toggles.
+  c(fresW,    'out', out, 'specular');
+}
+
 /* ---------------- Registry (order = display order in the picker) ---------------- */
 /* Template registry. `category` groups items into collapsible sections in the
    picker UI: 'demo' is the tutorial/feature-walkthrough set, 'showcase' is the
@@ -1775,6 +1969,8 @@ const SHADER_TEMPLATES = [
   // ---- Demos: illustrate specific features ----
   { id: 'lightingTest',    name: 'Lighting Test',    category:'demo',
     desc: 'Surface + Sim Light + Flag patch bay. Toggle diffuse/rim/iridescence.', load: tplLightingTest },
+  { id: 'lightingCompare', name: 'Lighting Compare', category:'demo',
+    desc: 'Side-by-side: World Normal vs Normal Map, both lit by Sim Light.', load: tplLightingCompare },
   { id: 'marbleGold',      name: 'Marble Gold',      category:'demo',
     desc: 'Warped FBM marble with gold veins — the dossier preset.',        load: tplMarbleGold },
   { id: 'marbleOnyx',      name: 'Marble Onyx',      category:'demo',
