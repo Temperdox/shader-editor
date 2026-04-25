@@ -76,20 +76,41 @@ function tplMarbleGold(){
 }
 
 /* ---------------- Normal Preview — shows the new normalMap node ---------------- */
+/* Normal Preview — procedural Normal Map rendered as a real lit surface.
+ * The Normal Map's output feeds Lambert against the cursor-driven Sim Light,
+ * so toggling the Lighting button actually shines a virtual light over the
+ * bumps. The result is shaded as if you're looking at a 3D surface lit
+ * from the cursor — exactly the lighting test the user expects. */
 function tplNormalPreview(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const cuv    = n('centeredUV',     -520,  40);
-  const time   = n('time',           -520, 220);
-  const normal = n('normalMap',      -160,  80, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
-  const color  = n('normalToColor',   220,  80);
-  const out    = n('output',          560,  80);
+  const cuv    = n('centeredUV', -820, -40);
+  const time   = n('time',       -820, 140);
+  const normal = n('normalMap',  -520,  20, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
 
-  c(cuv,    'p',       normal, 'p');
-  c(time,   'out',     normal, 'time');
-  c(normal, 'normal',  color,  'n');
-  c(color,  'out',     out,    'color');
+  // Per-fragment point light driven by the cursor (when Lighting is on).
+  const simL = n('simLight', -820, 300);
+
+  const lamb     = n('lambert', -200,  80, {}, { ambient: 0.18 });
+  const dark     = n('color',   -200, 240, { rgb: [0.05, 0.07, 0.10] });
+  const lit      = n('color',   -200, 380, { rgb: [0.90, 0.82, 0.68] });
+  const lambBody = n('mix',      140, 200);
+
+  const out = n('output', 500, 200);
+
+  c(cuv,  'p',   normal, 'p');
+  c(time, 'out', normal, 'time');
+  c(cuv,  'p',   simL,   'pos');
+
+  c(normal, 'normal', lamb, 'normal');
+  c(simL,   'out',    lamb, 'lightDir');
+
+  c(dark, 'out', lambBody, 'a');
+  c(lit,  'out', lambBody, 'b');
+  c(lamb, 'out', lambBody, 't');
+
+  c(lambBody, 'out', out, 'color');
 }
 
 /* ---------------- Height Field — visualizes heightMap as grayscale ---------------- */

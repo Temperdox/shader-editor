@@ -21,25 +21,19 @@ const renderer = (() => {
   // compile will then error with a clearer message.
   gl.getExtension('OES_standard_derivatives');
 
-  // Vertex shader: in flat mode (u_surface = 0) it behaves like the old
-  // fullscreen-quad pass-through and v_surfaceNormal is (0, 0, 1). When
-  // u_surface > 0 we compute a noise-based height field and output the
-  // analytical normal so the fragment shader gets smoothly-interpolated
-  // 3D normals across the grid — a test bed for lighting / Fresnel /
-  // iridescence that's impossible to get from a flat single quad.
-  //
-  // Position stays in clip space (no actual Z displacement) so all existing
-  // shader graphs still render full-screen; only the NORMAL varies. That's
-  // enough for Fresnel / Lambert / specular bloom to react meaningfully.
+  // Vertex shader: pass-through XY for the fullscreen mesh, plus a built-in
+  // noise-based normal field exposed via `v_surfaceNormal`. The fragment
+  // shader can read this through the `World Normal` node for shaders that
+  // want a procedural 3D-feeling normal (Lambert / Fresnel / etc.). Vertex
+  // POSITIONS are never displaced — keeping the mesh flat means existing
+  // shaders aren't visually distorted by the test-surface mechanism.
   const VS = `
     attribute vec2 a_position;
     attribute vec2 a_uv;
-    uniform float u_surface;
     varying vec2 v_uv;
     varying vec3 v_surfaceNormal;
 
-    // Value-noise with smooth bilinear interpolation — good enough for a
-    // height field and cheap in the VS. Uses a hash of integer cell coords.
+    // Cheap value noise for the test height field (used only for normals).
     float _vsHash(vec2 p){
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
     }
@@ -54,33 +48,23 @@ const renderer = (() => {
       return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
     }
     float _vsHeight(vec2 p){
-      return (_vsNoise(p * 6.0) * 0.35 + _vsNoise(p * 14.0) * 0.18) * u_surface;
+      return _vsNoise(p * 6.0) * 0.35 + _vsNoise(p * 14.0) * 0.18;
     }
 
     void main(){
       v_uv = a_uv;
-      // Analytical normal via finite differences. eps ~ 2 grid cells keeps
-      // the gradient smooth even at the lowest tessellation, and keeps the
-      // VS cost low (just 3 noise calls per vertex).
+      // Analytical normal via finite differences of the noise heightfield.
       float e = 0.04;
       float hC = _vsHeight(a_position);
       float hR = _vsHeight(a_position + vec2(e, 0.0));
       float hU = _vsHeight(a_position + vec2(0.0, e));
       v_surfaceNormal = normalize(vec3((hC - hR) / e, (hC - hU) / e, 1.0));
-      // Visible 3D: shift Y by the height value so the deformation actually
-      // shows up on screen as a bumpy/wavy mesh, not just as varying normals
-      // (which would be invisible on a flat-shaded fragment shader). When
-      // u_surface=0 the height is 0 so this collapses back to a flat quad
-      // and existing graphs render identically to before. The edgeFalloff
-      // damps the shift near the screen borders so the mesh stays flush
-      // with the canvas edges instead of leaving gaps.
-      float edgeFalloff = 1.0 - smoothstep(0.7, 1.0, abs(a_position.y));
-      gl_Position = vec4(a_position.x, a_position.y + hC * 0.22 * edgeFalloff, 0.0, 1.0);
+      gl_Position = vec4(a_position, 0.0, 1.0);
     }
   `;
 
   let program = null;
-  let uTime, uMouse, uRes, uSimLight, uSurface;
+  let uTime, uMouse, uRes, uSimLight;
   let mx = 0.5, my = 0.5;
 
   // Texture registry bound to this GL context. One per renderer so each
@@ -191,7 +175,6 @@ const renderer = (() => {
       uMouse    = gl.getUniformLocation(program, 'u_mouse');
       uRes      = gl.getUniformLocation(program, 'u_resolution');
       uSimLight = gl.getUniformLocation(program, 'u_simLight');
-      uSurface  = gl.getUniformLocation(program, 'u_surface');
 
       // Resolve each sampler2D uniform location and lock it to a texture slot.
       // uniform1i only needs to be set once per program — the frame loop just
@@ -277,12 +260,6 @@ const renderer = (() => {
           } else {
             if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
           }
-          // Surface mode — the VS applies a noise-height-derived normal to
-          // every vertex when on. Fragment shaders reading v_surfaceNormal
-          // (via the World Normal node) see real 3D variation; flat shaders
-          // are unaffected because v_surfaceNormal defaults to (0,0,1).
-          const surfaceOn = document.body.classList.contains('surface-on');
-          if (uSurface) gl.uniform1f(uSurface, surfaceOn ? 1.0 : 0.0);
           for (const b of textureBindings){
             gl.activeTexture(gl.TEXTURE0 + b.slot);
             gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));

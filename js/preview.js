@@ -47,7 +47,7 @@ const PREVIEW = (() => {
   let gl = null;
   let program = null;
   let posBuf, uvBuf, idxBuf, indexCount = 0;
-  let uTime, uMouse, uRes, uSimLight, uSurface;
+  let uTime, uMouse, uRes, uSimLight;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
@@ -91,13 +91,11 @@ const PREVIEW = (() => {
     lastAttr.clear();
   }
 
-  // Same VS as renderer.js — compiles a noise-height-field normal when the
-  // Surface button is on, so v_surfaceNormal carries real 3D variation even
-  // in preview mode. See js/renderer.js for the full rationale.
+  // Same VS as renderer.js — pass-through positions, with a noise-derived
+  // v_surfaceNormal varying available to the World Normal node.
   const VS_SRC = `
     attribute vec2 a_position;
     attribute vec2 a_uv;
-    uniform float u_surface;
     varying vec2 v_uv;
     varying vec3 v_surfaceNormal;
 
@@ -115,7 +113,7 @@ const PREVIEW = (() => {
       return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
     }
     float _vsHeight(vec2 p){
-      return (_vsNoise(p * 6.0) * 0.35 + _vsNoise(p * 14.0) * 0.18) * u_surface;
+      return _vsNoise(p * 6.0) * 0.35 + _vsNoise(p * 14.0) * 0.18;
     }
 
     void main(){
@@ -125,10 +123,7 @@ const PREVIEW = (() => {
       float hR = _vsHeight(a_position + vec2(e, 0.0));
       float hU = _vsHeight(a_position + vec2(0.0, e));
       v_surfaceNormal = normalize(vec3((hC - hR) / e, (hC - hU) / e, 1.0));
-      // Visible 3D Y-shift, damped near the canvas edges so the mesh stays
-      // flush with the borders. Collapses to a flat quad when u_surface=0.
-      float edgeFalloff = 1.0 - smoothstep(0.7, 1.0, abs(a_position.y));
-      gl_Position = vec4(a_position.x, a_position.y + hC * 0.22 * edgeFalloff, 0.0, 1.0);
+      gl_Position = vec4(a_position, 0.0, 1.0);
     }
   `;
 
@@ -241,7 +236,6 @@ const PREVIEW = (() => {
     uMouse    = gl.getUniformLocation(program, 'u_mouse');
     uRes      = gl.getUniformLocation(program, 'u_resolution');
     uSimLight = gl.getUniformLocation(program, 'u_simLight');
-    uSurface  = gl.getUniformLocation(program, 'u_surface');
 
     // Same texture binding strategy as renderer.js — one uniform1i per slot
     // at link time, then just rebind the underlying texture in `frame()`.
@@ -323,9 +317,6 @@ const PREVIEW = (() => {
         } else {
           if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
         }
-        // Surface mode — VS deforms vertex normals when on.
-        const surfaceOn = document.body.classList.contains('surface-on');
-        if (uSurface) gl.uniform1f(uSurface, surfaceOn ? 1.0 : 0.0);
         for (const b of textureBindings){
           gl.activeTexture(gl.TEXTURE0 + b.slot);
           gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));

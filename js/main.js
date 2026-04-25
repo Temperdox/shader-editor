@@ -43,19 +43,6 @@ $('#simLightBtn').addEventListener('click', () => {
   }, { passive: true });
 })();
 
-// Surface — toggles the 64×64 tessellated test mesh's procedural height
-// field. When on, the vertex shader computes per-vertex normals from a
-// noise-based height field and passes them via v_surfaceNormal (readable
-// in-graph via the World Normal node). Exists as a lighting test bed so
-// you can see Fresnel / Lambert / iridescence react across real 3D normals
-// instead of the flat (0,0,1) they get on an untextured fullscreen quad.
-$('#surfaceBtn').addEventListener('click', () => {
-  const on = document.body.classList.toggle('surface-on');
-  const btn = $('#surfaceBtn');
-  const label = btn.querySelector('.surface-label');
-  if (label) label.textContent = on ? 'On' : 'Surface';
-  btn.classList.toggle('active', on);
-});
 
 // Save shader as PNG — downloads the current bgShader canvas. Requires
 // `preserveDrawingBuffer: true` on the WebGL context (set in renderer.js).
