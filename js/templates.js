@@ -420,13 +420,23 @@ function tplBrickWall(){
 
 /* ---------------- Brick Wall + Spec — diffuse + normal + spec, lit ----
  * Extends Brick Wall: same Lambert-against-Sim-Light setup as a base, plus
- * a third Texture node sampling the spec map. The spec mask is multiplied
- * by pow(lambert, 16) so the highlight only fires where the surface is
- * BOTH shiny (per the spec map) AND directly facing the cursor light — a
- * cheap Blinn-ish phong without needing a full reflect-and-dot chain. The
- * highlight is then promoted to gray and additively blended onto the lit
- * diffuse, so moving the cursor sweeps a glossy hot spot across the brick
- * faces while the mortar (dark in the spec map) stays matte.
+ * the spec map sampled and shaped by pow(lambert, 16) for a tight glossy
+ * highlight that only fires where the surface is both shiny AND facing
+ * the cursor light.
+ *
+ * NEW: a static high-frequency noise lane (no time, doesn't animate) acts
+ * as a roughness modulator on the specular. It's gated by a Flag with a
+ * single passthrough toggle:
+ *   • Flag enabled  → noise darkens the highlight where the noise is
+ *     bright, breaking up the smooth glossy spot into a grainy "real
+ *     brick face" feel.
+ *   • Flag disabled → the lane outputs vec3(0); a difference-with-white
+ *     trick turns that into a (1,1,1) multiplier, which leaves the
+ *     specular untouched (smooth, like before).
+ *
+ * The math behind the gate: roughened_spec = spec × |white − flag.out|.
+ * When flag.out = (0,0,0) the multiplier is white → no effect. When
+ * flag.out is the noise vec3, the multiplier is (1 − noise) → darkening.
  */
 function tplBrickWallSpec(){
   _clearGraph();
@@ -436,30 +446,55 @@ function tplBrickWallSpec(){
   const NORM_URL = 'assets/textures/brick-wall/normal.png';
   const SPEC_URL = 'assets/textures/brick-wall/spec.png';
 
-  const uv   = n('uv',         -940,   80);
-  const cuv  = n('centeredUV', -940,  -60);
-  const simL = n('simLight',   -940, -220);
+  const uv   = n('uv',         -1320,  100);
+  const cuv  = n('centeredUV', -1320,  -40);
+  const simL = n('simLight',   -1320, -200);
 
-  const diff = n('texture',    -620, -100, { imageUrl: DIFF_URL });
-  const norm = n('normalMap',  -620,  200, { mode: 'static', imageUrl: NORM_URL });
-  const spec = n('texture',    -620,  440, { imageUrl: SPEC_URL });
+  const diff = n('texture',    -1000, -100, { imageUrl: DIFF_URL });
+  const norm = n('normalMap',  -1000,  220, { mode: 'static', imageUrl: NORM_URL });
+  const spec = n('texture',    -1000,  460, { imageUrl: SPEC_URL });
 
-  // Diffuse lighting
-  const lamb  = n('lambert', -300, 100, {}, { ambient: 0.22 });
-  const black = n('color',   -300, -100, { rgb: [0, 0, 0] });
-  const lit   = n('mix',       60,   20);   // mix(black, diff.rgb, lamb)
+  // --- Diffuse lighting ---
+  const lamb  = n('lambert',  -680, 120, {}, { ambient: 0.22 });
+  const black = n('color',    -680, -100, { rgb: [0, 0, 0] });
+  const lit   = n('mix',      -340,   20);
 
-  // Specular highlight: pow(lambert, 16) × spec.r → bright spot only on
-  // shiny pixels facing the cursor light. Higher exponent = tighter spot.
-  const sharp   = n('float',    -300, 320, { value: 16.0 });
-  const lambPow = n('pow',        60,  220);   // pow(lamb, 16)
-  const specHi  = n('multiply',  380,  280);   // pow(lamb,16) * spec.r
-  const specGray= n('grayscale', 700,  280);   // float → vec3 gray
+  // --- Smooth specular intensity (float) ---
+  const sharp   = n('float',    -680, 340, { value: 16.0 });
+  const lambPow = n('pow',      -340, 240);                    // pow(lamb, 16)
+  const specHi  = n('multiply',    0, 300);                    // pow * spec.r
+  const specV3  = n('grayscale', 320, 300);                    // float → vec3
 
-  // Final = lit diffuse + spec highlight (additive)
-  const final = n('blend',     1020,  100, { mode: 'add' });
-  const out   = n('output',    1340,  100);
+  // --- Static high-frequency noise for roughness ---
+  // scaleVec2 multiplies UV by a constant to make the noise pattern tighter.
+  const noiseScale = n('float',    -680, 540, { value: 35.0 });
+  const noiseUV    = n('scaleVec2', -340, 480);                // uv * 35
+  const noiseS     = n('simplex',     0, 480);                 // snoise(scaledUV)
+  const noiseAbs   = n('abs',       320, 480);                 // |snoise| → ~[0,1]
+  const roughAmt   = n('float',       0, 620, { value: 0.7 }); // max darkening
+  const roughF     = n('multiply',  640, 540);                 // |s| * 0.7
+  const roughV3    = n('grayscale', 960, 540);                 // float → vec3
 
+  // --- Flag: 1 input / 1 output, passthrough = noise applies ---
+  const flag = n('flag', 1280, 540, {
+    numInputs:  1,
+    numOutputs: 1,
+    enabled:    [true],
+    wires:      [{ from: 0, to: 0 }],
+  });
+
+  // --- (vec3(1) − flag.out) via difference-with-white = roughness multiplier ---
+  const white   = n('color', 1280, 720, { rgb: [1, 1, 1] });
+  const inverse = n('blend', 1600, 620, { mode: 'difference' });
+
+  // --- Apply the multiplier to the specular ---
+  const roughSpec = n('blend', 1920, 460, { mode: 'multiply' });
+
+  // --- Final composite ---
+  const finalSum = n('blend', 2240, 220, { mode: 'add' });
+  const out      = n('output', 2560, 220);
+
+  // === wiring ===
   c(uv,  'out', diff, 'p');
   c(uv,  'out', norm, 'p');
   c(uv,  'out', spec, 'p');
@@ -473,18 +508,38 @@ function tplBrickWallSpec(){
   c(diff,  'rgb', lit, 'b');
   c(lamb,  'out', lit, 't');
 
-  // specular highlight build-up
+  // smooth specular
   c(lamb,    'out', lambPow, 'x');
   c(sharp,   'out', lambPow, 'e');
   c(spec,    'r',   specHi,  'a');
   c(lambPow, 'out', specHi,  'b');
-  c(specHi,  'out', specGray, 'x');
+  c(specHi,  'out', specV3,  'x');
+
+  // static noise pipeline
+  c(uv,         'out', noiseUV,  'v');
+  c(noiseScale, 'out', noiseUV,  's');
+  c(noiseUV,    'out', noiseS,   'p');
+  c(noiseS,     'out', noiseAbs, 'x');
+  c(noiseAbs,   'out', roughF,   'a');
+  c(roughAmt,   'out', roughF,   'b');
+  c(roughF,     'out', roughV3,  'x');
+
+  // route through the Flag toggle
+  c(roughV3, 'out', flag, 'in0');
+
+  // |white − flag.out| = (1 − roughness) when flag is on; (1) when flag is off
+  c(white, 'out',  inverse, 'a');
+  c(flag,  'out0', inverse, 'b');
+
+  // multiply the specular by the inverse → roughened (or unchanged) spec
+  c(specV3,  'out', roughSpec, 'a');
+  c(inverse, 'out', roughSpec, 'b');
 
   // additive composite
-  c(lit,      'out', final, 'a');
-  c(specGray, 'out', final, 'b');
+  c(lit,       'out', finalSum, 'a');
+  c(roughSpec, 'out', finalSum, 'b');
 
-  c(final, 'out', out, 'color');
+  c(finalSum, 'out', out, 'color');
 }
 
 /* ---------------- Radial Pulse — animated distance-to-center gradient ---------------- */
