@@ -52,10 +52,12 @@ function compileGraph(){
     if (!node) continue;
     const def = NODE_TYPES[node.type];
 
-    // resolve each input: connected → upstream ref; otherwise default literal
+    // resolve each input: connected → upstream ref; otherwise default literal.
+    // Nodes with dynamic socket schemas (Flag) expose `inputs` as a function.
     const inputExprs = {};
-    if (def.inputs){
-      for (const sock of def.inputs){
+    const schemaInputs = getNodeInputs(node);
+    if (schemaInputs){
+      for (const sock of schemaInputs){
         const conn = (edgesByTo.get(nid) || []).find(e => e.to.socket === sock.name);
         if (conn){
           const upstream = outputRefs.get(conn.from.nodeId);
@@ -98,8 +100,9 @@ function compileGraph(){
     }
 
     // single-expression shorthand
+    const schemaOutputs = getNodeOutputs(node);
     if (typeof result === 'string'){
-      const firstOut = (def.outputs && def.outputs[0] && def.outputs[0].name) || 'out';
+      const firstOut = (schemaOutputs && schemaOutputs[0] && schemaOutputs[0].name) || 'out';
       result = { exprs: { [firstOut]: result } };
     }
 
@@ -126,8 +129,8 @@ function compileGraph(){
     // linear (and so an expression feeding two consumers is only computed
     // once in the emitted GLSL).
     const refs = {};
-    if (def.outputs){
-      for (const out of def.outputs){
+    if (schemaOutputs){
+      for (const out of schemaOutputs){
         const expr = result.exprs && result.exprs[out.name];
         if (expr === undefined) continue;
         // If the expression is a bare identifier (like `u_time` or `x.y`),

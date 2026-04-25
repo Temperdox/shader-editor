@@ -1607,12 +1607,98 @@ function tplBloomStar(){
   c(add2, 'out', out, 'color');
 }
 
+/* ---- Lighting Test — surface + sim-light + Flag patch bay ----
+ *
+ * Test workflow demonstrated by this template:
+ *   1. World Normal → Lambert (fed by Sim Light) → composite with a color → Output.
+ *   2. Hit the Surface button (bottom-right) to see the tessellated mesh.
+ *   3. Hit the Lighting button and move your cursor to light the bumps.
+ *   4. The Flag module has three lanes:
+ *        in0 = Lambert shading  →  out0 (body colour)
+ *        in1 = Fresnel (rim)    →  out1
+ *        in2 = Iridescence      →  out2 (specular channel)
+ *      Toggle each output's passthrough checkbox to enable/disable that lane
+ *      without rewiring; right-click an internal wire to remove it; +/- on
+ *      the node to add more lanes. Great for A/B testing lighting terms.
+ */
+function tplLightingTest(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  // --- inputs for the three lighting lanes ---
+  const nor   = n('worldNormal', -1240, -140);
+  const simL  = n('simLight',    -1240,   20);
+  const view  = n('viewDir',     -1240,  180);
+  const tSlow = n('time',        -1240,  340, { scale: 0.2 });
+
+  // --- lighting terms ---
+  const lamb = n('lambert',     -900, -140, {}, { ambient: 0.2 });  // N·L (float)
+  const fres = n('fresnel',     -900,   40, {}, { power: 1.4 });    // rim (float)
+  const irid = n('iridescence', -900,  220, {}, { freq: 2.2 });     // rainbow (vec3)
+
+  // Lift the two scalar terms into coloured vec3 contributions.
+  const lambC   = n('color', -600, -180, { rgb: [0.85, 0.92, 1.0] }); // cool diffuse wash
+  const lambLit = n('mix',   -300, -160);                             // mix(black, lambC, lamb)
+  const fresC   = n('color', -600,  40,  { rgb: [1.0, 0.75, 0.45] }); // warm rim tint
+  const fresLit = n('mix',   -300,  60);                              // mix(black, fresC, fres)
+
+  // --- Flag patch bay: three vec3 lanes summed into a single body colour ---
+  // Defaults: all three inputs wire to out0, all passthroughs on. Toggle
+  // any passthrough (or right-click an internal wire) to isolate one lane.
+  const flag = n('flag', 60, 40, {
+    numInputs:  3,
+    numOutputs: 1,
+    enabled:    [true],
+    wires: [
+      { from: 0, to: 0 },   // lamb → body
+      { from: 1, to: 0 },   // rim  → body (adds over lamb)
+      { from: 2, to: 0 },   // irid → body (adds over rim)
+    ],
+  });
+
+  const out = n('output', 540, 40, {
+    bloom:          'on',
+    bloomThreshold: 0.3,
+    bloomRadius:    2.5,
+    bloomIntensity: 1.2,
+  });
+
+  // --- wiring ---
+  // Lambert lane (N·L from the cursor-driven sim light)
+  c(nor,   'out', lamb, 'normal');
+  c(simL,  'out', lamb, 'lightDir');
+  c(lambC, 'out', lambLit, 'b');
+  c(lamb,  'out', lambLit, 't');
+
+  // Fresnel lane (silhouette rim from view dir)
+  c(nor,   'out', fres, 'normal');
+  c(view,  'out', fres, 'view');
+  c(fresC, 'out', fresLit, 'b');
+  c(fres,  'out', fresLit, 't');
+
+  // Iridescence lane — already vec3
+  c(nor,   'out', irid, 'normal');
+  c(tSlow, 'out', irid, 'bias');
+
+  // All three lanes into the Flag's inputs; single summed output to color.
+  c(lambLit, 'out', flag, 'in0');
+  c(fresLit, 'out', flag, 'in1');
+  c(irid,    'out', flag, 'in2');
+  c(flag,   'out0', out,  'color');
+
+  // Specular is a float — wire Fresnel directly so bloom catches the rim
+  // regardless of whether the rim lane is toggled on inside the Flag.
+  c(fres,  'out', out, 'specular');
+}
+
 /* ---------------- Registry (order = display order in the picker) ---------------- */
 /* Template registry. `category` groups items into collapsible sections in the
    picker UI: 'demo' is the tutorial/feature-walkthrough set, 'showcase' is the
    fun/wild creative-use set. Default is 'demo' if omitted. */
 const SHADER_TEMPLATES = [
   // ---- Demos: illustrate specific features ----
+  { id: 'lightingTest',    name: 'Lighting Test',    category:'demo',
+    desc: 'Surface + Sim Light + Flag patch bay. Toggle diffuse/rim/iridescence.', load: tplLightingTest },
   { id: 'marbleGold',      name: 'Marble Gold',      category:'demo',
     desc: 'Warped FBM marble with gold veins — the dossier preset.',        load: tplMarbleGold },
   { id: 'marbleOnyx',      name: 'Marble Onyx',      category:'demo',

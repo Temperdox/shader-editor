@@ -1731,6 +1731,59 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
     },
   },
 
+  /* ---- patch bay / debug routing ---- */
+  flag: {
+    category:'Module', title:'Flag', desc:'patch bay — internally wire inputs to outputs, toggle each',
+    // Dynamic schema: the input / output socket lists are derived from the
+    // `numInputs` / `numOutputs` params at render + compile time. See
+    // getNodeInputs / getNodeOutputs in graph-state.js and the editor's
+    // customBody path in renderNode.
+    inputs:  (node) => {
+      const n = (node && node.params && node.params.numInputs) || 0;
+      const list = [];
+      for (let i = 0; i < n; i++) list.push({ name: `in${i}`, type: 'vec3', default: [0, 0, 0] });
+      return list;
+    },
+    outputs: (node) => {
+      const n = (node && node.params && node.params.numOutputs) || 0;
+      const list = [];
+      for (let j = 0; j < n; j++) list.push({ name: `out${j}`, type: 'vec3' });
+      return list;
+    },
+    // The editor renders a bespoke body (internal sockets + wires + toggles).
+    // Normal param rows aren't drawn — see editor.js renderFlagBody.
+    customBody: 'flag',
+    params: [
+      { name:'numInputs',  kind:'hidden', default: 3 },
+      { name:'numOutputs', kind:'hidden', default: 3 },
+      { name:'enabled',    kind:'hidden', default: [true, true, true] },
+      { name:'wires',      kind:'hidden', default: [] },   // [{from:inputIdx, to:outputIdx}]
+    ],
+    // For each module output j:
+    //   - if enabled[j] is false → vec3(0)
+    //   - otherwise sum every input wired to j; if none, vec3(0)
+    generate: (ctx) => {
+      const numOut  = (ctx.node.params.numOutputs) || 0;
+      const enabled = Array.isArray(ctx.node.params.enabled) ? ctx.node.params.enabled : [];
+      const wires   = Array.isArray(ctx.node.params.wires)   ? ctx.node.params.wires   : [];
+      const exprs = {};
+      for (let j = 0; j < numOut; j++){
+        if (enabled[j] === false){
+          exprs[`out${j}`] = 'vec3(0.0)';
+          continue;
+        }
+        const feeds = wires
+          .filter(w => w.to === j)
+          .map(w => ctx.inputs[`in${w.from}`])
+          .filter(Boolean);
+        if (feeds.length === 0)      exprs[`out${j}`] = 'vec3(0.0)';
+        else if (feeds.length === 1) exprs[`out${j}`] = feeds[0];
+        else                         exprs[`out${j}`] = `(${feeds.join(' + ')})`;
+      }
+      return { exprs };
+    },
+  },
+
   /* ---- terminal ---- */
   output: {
     category:'Output', title:'Fragment Output', desc:'gl_FragColor + specular-driven bloom',

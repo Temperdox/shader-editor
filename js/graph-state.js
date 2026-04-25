@@ -99,6 +99,22 @@ function redo(){
   return true;
 }
 
+// Resolve a node's input-socket list. Most node definitions expose `inputs`
+// as a fixed array at the schema level; the Flag module exposes it as a
+// function of the node instance so the socket count can grow with params.
+function getNodeInputs(node){
+  if (!node) return [];
+  const def = NODE_TYPES[node.type];
+  if (!def) return [];
+  return (typeof def.inputs === 'function') ? def.inputs(node) : (def.inputs || []);
+}
+function getNodeOutputs(node){
+  if (!node) return [];
+  const def = NODE_TYPES[node.type];
+  if (!def) return [];
+  return (typeof def.outputs === 'function') ? def.outputs(node) : (def.outputs || []);
+}
+
 function makeNode(type, x, y){
   const def = NODE_TYPES[type];
   if (!def) throw new Error(`unknown node type ${type}`);
@@ -111,11 +127,15 @@ function makeNode(type, x, y){
     }
   }
 
+  const tempNode = { id: null, type, x, y, params, defaults: {} };
+
   // socket default overrides (rarely used; placeholder for future UI to set
   // per-socket constants without needing an explicit const node upstream).
+  // Resolve dynamic inputs now (Flag's inputs depend on params).
   const defaults = {};
-  if (def.inputs){
-    for (const sock of def.inputs){
+  const schemaInputs = (typeof def.inputs === 'function') ? def.inputs(tempNode) : def.inputs;
+  if (schemaInputs){
+    for (const sock of schemaInputs){
       if (sock.default !== undefined){
         defaults[sock.name] = Array.isArray(sock.default) ? [...sock.default] : sock.default;
       }

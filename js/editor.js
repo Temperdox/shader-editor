@@ -50,9 +50,31 @@ function renderNode(node){
   body.className = 'node-body';
   el.appendChild(body);
 
-  const inputs  = def.inputs  || [];
-  const outputs = def.outputs || [];
+  const inputs  = getNodeInputs(node);
+  const outputs = getNodeOutputs(node);
   const params  = def.params  || [];
+
+  // Flag module renders a totally custom body (internal sockets + wires),
+  // not the standard param / input / output rows. Short-circuit here and
+  // let renderFlagBody do the work.
+  if (def.customBody === 'flag'){
+    renderFlagBody(node, el, body);
+    attachNodeDrag(el, node);
+    attachSocketHandlers(el);
+    el.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      const multi = e.shiftKey || e.ctrlKey || e.metaKey;
+      if (multi){
+        if (state.selected.has(node.id)) state.selected.delete(node.id);
+        else                              state.selected.add(node.id);
+      } else if (!state.selected.has(node.id)){
+        state.selected.clear();
+        state.selected.add(node.id);
+      }
+      refreshSelectionClasses();
+    });
+    return el;
+  }
 
   // param rows (numbers, colors, vec2, selects, segmented toggles, images).
   // Each param can opt into conditional display via `visibleWhen(params)` —
@@ -969,4 +991,302 @@ function doUndo(){
 }
 function doRedo(){
   if (redo()){ renderAll(); recompileShader(); toast('redo'); }
+}
+
+/* ================== Flag module rendering ==================
+   The Flag node is a patch bay with user-editable internal wires between
+   its inputs and outputs. Each input has an external socket (for upstream
+   connections from the main graph) + an internal socket that the user can
+   wire to output-side internal sockets. Each output similarly has an
+   internal socket + an external socket + a passthrough enable checkbox.
+   Internal wires live in `node.params.wires` as [{from, to}] pairs and
+   are rendered as SVG paths inside the node body. */
+function renderFlagBody(node, nodeEl, bodyEl){
+  bodyEl.classList.add('flag-body');
+  const numIn  = node.params.numInputs  || 0;
+  const numOut = node.params.numOutputs || 0;
+
+  // Toolbar: +/- buttons for input and output counts.
+  const toolbar = document.createElement('div');
+  toolbar.className = 'flag-toolbar';
+  toolbar.innerHTML = `
+    <span class="flag-toolbar-group">
+      IN <button type="button" class="flag-tb-btn" data-act="dec-in">−</button>
+      <span class="flag-tb-count">${numIn}</span>
+      <button type="button" class="flag-tb-btn" data-act="inc-in">+</button>
+    </span>
+    <span class="flag-toolbar-group">
+      OUT <button type="button" class="flag-tb-btn" data-act="dec-out">−</button>
+      <span class="flag-tb-count">${numOut}</span>
+      <button type="button" class="flag-tb-btn" data-act="inc-out">+</button>
+    </span>
+  `;
+  toolbar.addEventListener('pointerdown', e => e.stopPropagation());
+  for (const btn of toolbar.querySelectorAll('.flag-tb-btn')){
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if      (act === 'inc-in')  flagSetInputCount (node, (node.params.numInputs  || 0) + 1);
+      else if (act === 'dec-in')  flagSetInputCount (node, (node.params.numInputs  || 0) - 1);
+      else if (act === 'inc-out') flagSetOutputCount(node, (node.params.numOutputs || 0) + 1);
+      else if (act === 'dec-out') flagSetOutputCount(node, (node.params.numOutputs || 0) - 1);
+    });
+  }
+  bodyEl.appendChild(toolbar);
+
+  // The patch area: two columns, with an SVG wire overlay positioned on top.
+  const zone = document.createElement('div');
+  zone.className = 'flag-zone';
+  bodyEl.appendChild(zone);
+
+  const leftCol = document.createElement('div');
+  leftCol.className = 'flag-col flag-col-in';
+  zone.appendChild(leftCol);
+
+  const rightCol = document.createElement('div');
+  rightCol.className = 'flag-col flag-col-out';
+  zone.appendChild(rightCol);
+
+  // Input rows: external socket on the left edge, then label, then internal
+  // socket (acts as an OUT for internal wiring — the input proxy emits).
+  for (let i = 0; i < numIn; i++){
+    const row = document.createElement('div');
+    row.className = 'flag-row flag-row-in';
+
+    const ext = document.createElement('div');
+    ext.className = 'socket in';
+    ext.dataset.nodeId   = node.id;
+    ext.dataset.socket   = `in${i}`;
+    ext.dataset.dir      = 'in';
+    ext.dataset.sockType = 'vec3';
+    if (isSocketConnected(node.id, 'in', `in${i}`)) ext.classList.add('connected');
+    row.appendChild(ext);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'flag-label';
+    lbl.textContent = `in${i}`;
+    row.appendChild(lbl);
+
+    const inner = document.createElement('div');
+    inner.className = 'socket-internal internal-out';
+    inner.dataset.nodeId = node.id;
+    inner.dataset.side   = 'in';    // belongs to an INPUT proxy
+    inner.dataset.index  = String(i);
+    row.appendChild(inner);
+
+    leftCol.appendChild(row);
+  }
+
+  // Output rows: internal socket (acts as IN for internal wiring — the output
+  // proxy receives), passthrough checkbox, label, external socket.
+  const enabled = Array.isArray(node.params.enabled) ? node.params.enabled : [];
+  for (let j = 0; j < numOut; j++){
+    const row = document.createElement('div');
+    row.className = 'flag-row flag-row-out';
+
+    const inner = document.createElement('div');
+    inner.className = 'socket-internal internal-in';
+    inner.dataset.nodeId = node.id;
+    inner.dataset.side   = 'out';   // belongs to an OUTPUT proxy
+    inner.dataset.index  = String(j);
+    row.appendChild(inner);
+
+    const chk = document.createElement('label');
+    chk.className = 'flag-pt';
+    chk.title = 'Passthrough enable';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = enabled[j] !== false;
+    cb.addEventListener('pointerdown', e => e.stopPropagation());
+    cb.addEventListener('change', () => {
+      const arr = Array.isArray(node.params.enabled) ? [...node.params.enabled] : [];
+      while (arr.length < numOut) arr.push(true);
+      arr[j] = cb.checked;
+      node.params.enabled = arr;
+      scheduleRecompile();
+      pushHistory();
+    });
+    chk.appendChild(cb);
+    row.appendChild(chk);
+
+    const lbl = document.createElement('span');
+    lbl.className = 'flag-label';
+    lbl.textContent = `out${j}`;
+    row.appendChild(lbl);
+
+    const ext = document.createElement('div');
+    ext.className = 'socket out';
+    ext.dataset.nodeId   = node.id;
+    ext.dataset.socket   = `out${j}`;
+    ext.dataset.dir      = 'out';
+    ext.dataset.sockType = 'vec3';
+    if (isSocketConnected(node.id, 'out', `out${j}`)) ext.classList.add('connected');
+    row.appendChild(ext);
+
+    rightCol.appendChild(row);
+  }
+
+  // SVG overlay for internal wires. Rendered AFTER layout so we can read
+  // actual element positions via offsetTop/offsetLeft.
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.classList.add('flag-wires');
+  zone.appendChild(svg);
+
+  // Attach internal-wire drag handlers to each internal socket.
+  for (const inner of zone.querySelectorAll('.socket-internal')){
+    inner.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      startFlagInternalWire(node, inner, zone, svg);
+    });
+  }
+
+  // Defer the wire draw until the DOM has a layout. requestAnimationFrame
+  // is enough — by then the node is sized and offsetTop is meaningful.
+  requestAnimationFrame(() => drawFlagWires(node, zone, svg));
+}
+
+function flagSetInputCount(node, target){
+  target = Math.max(0, Math.min(8, Math.floor(target)));
+  const prev = node.params.numInputs || 0;
+  if (target === prev) return;
+  node.params.numInputs = target;
+  // If shrinking, strip any external connections + internal wires that
+  // reference now-gone inputs.
+  if (target < prev){
+    const dropped = new Set();
+    for (let i = target; i < prev; i++) dropped.add(`in${i}`);
+    state.connections = state.connections.filter(c => !(c.to.nodeId === node.id && dropped.has(c.to.socket)));
+    node.params.wires = (node.params.wires || []).filter(w => w.from < target);
+  }
+  renderAll();
+  scheduleRecompile();
+  pushHistory();
+}
+function flagSetOutputCount(node, target){
+  target = Math.max(0, Math.min(8, Math.floor(target)));
+  const prev = node.params.numOutputs || 0;
+  if (target === prev) return;
+  node.params.numOutputs = target;
+  if (target < prev){
+    const dropped = new Set();
+    for (let j = target; j < prev; j++) dropped.add(`out${j}`);
+    state.connections = state.connections.filter(c => !(c.from.nodeId === node.id && dropped.has(c.from.socket)));
+    node.params.wires = (node.params.wires || []).filter(w => w.to < target);
+  }
+  // extend the enabled array with defaults
+  const en = Array.isArray(node.params.enabled) ? [...node.params.enabled] : [];
+  while (en.length < target) en.push(true);
+  en.length = target;
+  node.params.enabled = en;
+  renderAll();
+  scheduleRecompile();
+  pushHistory();
+}
+
+/* Socket centre in zone-local pixel coords, walked via offsetParent chain so
+   the result is in NATURAL (pre-viewport-transform) pixels — matching the
+   SVG's coordinate space. BoundingClientRect would include the viewport's
+   CSS transform scale and come out wrong at non-1.0 zoom. */
+function flagInternalSocketXY(sockEl, zoneEl){
+  let x = 0, y = 0;
+  let el = sockEl;
+  while (el && el !== zoneEl){
+    x += el.offsetLeft;
+    y += el.offsetTop;
+    el = el.offsetParent;
+  }
+  return { x: x + sockEl.offsetWidth / 2, y: y + sockEl.offsetHeight / 2 };
+}
+
+function flagCurve(a, b){
+  const dx = Math.max(20, Math.abs(b.x - a.x) * 0.4);
+  return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+}
+
+function drawFlagWires(node, zone, svg){
+  // size the SVG to the zone
+  svg.setAttribute('width', zone.clientWidth);
+  svg.setAttribute('height', zone.clientHeight);
+  svg.innerHTML = '';
+  const wires = Array.isArray(node.params.wires) ? node.params.wires : [];
+  for (const w of wires){
+    const src = zone.querySelector(`.socket-internal.internal-out[data-index="${w.from}"]`);
+    const dst = zone.querySelector(`.socket-internal.internal-in[data-index="${w.to}"]`);
+    if (!src || !dst) continue;
+    const a = flagInternalSocketXY(src, zone);
+    const b = flagInternalSocketXY(dst, zone);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', flagCurve(a, b));
+    path.classList.add('flag-wire');
+    path.dataset.from = String(w.from);
+    path.dataset.to   = String(w.to);
+    // Right-click (or alt-click) on a wire deletes it.
+    path.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      node.params.wires = wires.filter(x => !(x.from === w.from && x.to === w.to));
+      renderAll();
+      scheduleRecompile();
+      pushHistory();
+    });
+    svg.appendChild(path);
+  }
+}
+
+/* Internal-wire drag. Both ends of a candidate wire are internal sockets
+   on the SAME flag node. Direction is inferred: if the user started on an
+   input-side (internal-out) socket we need to drop on an output-side
+   (internal-in), and vice versa. */
+function startFlagInternalWire(node, startSock, zone, svg){
+  const startSide = startSock.dataset.side;   // 'in' (proxy-output) | 'out' (proxy-input)
+  const start = flagInternalSocketXY(startSock, zone);
+
+  const preview = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  preview.classList.add('flag-wire', 'preview');
+  svg.appendChild(preview);
+
+  const onMove = (e) => {
+    // Convert from cursor page pixels back into natural SVG pixels. The
+    // viewport CSS-scales the whole graph, so the client-side delta has to
+    // be divided by state.view.scale to match the offset-based source coords.
+    const r = zone.getBoundingClientRect();
+    const sc = state.view.scale || 1;
+    const end = { x: (e.clientX - r.left) / sc, y: (e.clientY - r.top) / sc };
+    preview.setAttribute('d', startSide === 'in' ? flagCurve(start, end) : flagCurve(end, start));
+
+    // highlight a valid drop target
+    zone.querySelectorAll('.socket-internal.drop-target').forEach(s => s.classList.remove('drop-target'));
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    if (over && over.classList.contains('socket-internal') &&
+        over.dataset.nodeId === node.id && over.dataset.side !== startSide){
+      over.classList.add('drop-target');
+    }
+  };
+  const onUp = (e) => {
+    const over = document.elementFromPoint(e.clientX, e.clientY);
+    zone.querySelectorAll('.socket-internal.drop-target').forEach(s => s.classList.remove('drop-target'));
+    if (over && over.classList.contains('socket-internal') &&
+        over.dataset.nodeId === node.id && over.dataset.side !== startSide){
+      const fromIdx = startSide === 'in'
+        ? Number(startSock.dataset.index)
+        : Number(over.dataset.index);
+      const toIdx = startSide === 'in'
+        ? Number(over.dataset.index)
+        : Number(startSock.dataset.index);
+      const wires = Array.isArray(node.params.wires) ? [...node.params.wires] : [];
+      if (!wires.some(w => w.from === fromIdx && w.to === toIdx)){
+        wires.push({ from: fromIdx, to: toIdx });
+        node.params.wires = wires;
+        renderAll();
+        scheduleRecompile();
+        pushHistory();
+      }
+    }
+    if (preview.parentNode) preview.parentNode.removeChild(preview);
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup',   onUp);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup',   onUp);
 }

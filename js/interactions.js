@@ -262,7 +262,7 @@ function renderPicker(q){
     if (!match) continue;
     (byCat[def.category] ||= []).push({ type, def });
   }
-  const catOrder = ['Input', 'Math', 'Vector', 'Pattern', 'Effect'];
+  const catOrder = ['Input', 'Math', 'Vector', 'Pattern', 'Effect', 'Module'];
   const cats = Object.keys(byCat).sort((a, b) => {
     const ai = catOrder.indexOf(a), bi = catOrder.indexOf(b);
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
