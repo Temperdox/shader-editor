@@ -76,12 +76,33 @@ function tplMarbleGold(){
 }
 
 /* ---------------- Normal Preview — shows the new normalMap node ---------------- */
-/* Normal Preview — procedural Normal Map rendered as a real lit surface.
- * The Normal Map's output feeds Lambert against the cursor-driven Sim Light,
- * so toggling the Lighting button actually shines a virtual light over the
- * bumps. The result is shaded as if you're looking at a 3D surface lit
- * from the cursor — exactly the lighting test the user expects. */
+/* Normal Preview — pure tangent-space normal-as-RGB visualization.
+ * Maps the procedural Normal Map's output through normalToColor to get the
+ * classic blue-purple "normal map" look (each channel = a normal axis).
+ * No lighting — strictly a debug view of what the normal direction looks
+ * like at every pixel. For a LIT version, see "Normal + Color". */
 function tplNormalPreview(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv    = n('centeredUV',     -520,  40);
+  const time   = n('time',           -520, 220);
+  const normal = n('normalMap',      -160,  80, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
+  const color  = n('normalToColor',   220,  80);
+  const out    = n('output',          560,  80);
+
+  c(cuv,    'p',       normal, 'p');
+  c(time,   'out',     normal, 'time');
+  c(normal, 'normal',  color,  'n');
+  c(color,  'out',     out,    'color');
+}
+
+/* Normal + Color — same procedural normal as Normal Preview, but rendered
+ * as a real lit surface. Lambert against the cursor-driven Sim Light shades
+ * the bumps; turning on the Lighting button moves the highlight live with
+ * the cursor. Use this template to see how a normal map interacts with a
+ * point light source. */
+function tplNormalLit(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
@@ -89,7 +110,6 @@ function tplNormalPreview(){
   const time   = n('time',       -820, 140);
   const normal = n('normalMap',  -520,  20, { scale: 2.5, strength: 3.0, epsilon: 0.004 });
 
-  // Per-fragment point light driven by the cursor (when Lighting is on).
   const simL = n('simLight', -820, 300);
 
   const lamb     = n('lambert', -200,  80, {}, { ambient: 0.18 });
@@ -1754,6 +1774,8 @@ const SHADER_TEMPLATES = [
     desc: 'FBM heightmap visualized as grayscale + vignette.',              load: tplHeightField },
   { id: 'normalPreview',   name: 'Normal Preview',   category:'demo',
     desc: 'Normal map encoded as RGB (the classic blue-ish look).',         load: tplNormalPreview },
+  { id: 'normalLit',       name: 'Normal + Color',   category:'demo',
+    desc: 'Same procedural normal lit by Sim Light — toggle Lighting to see.', load: tplNormalLit },
   { id: 'terrainRelief',   name: 'Terrain Relief',   category:'demo',
     desc: 'Height + normal composited for shaded-terrain look.',            load: tplTerrainRelief },
   { id: 'litHeightfield',  name: 'Lit Heightfield',  category:'demo',

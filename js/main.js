@@ -30,17 +30,54 @@ $('#simLightBtn').addEventListener('click', () => {
   btn.classList.toggle('active', on);
 });
 
-// Lightbulb cursor follower — tracks the pointer whenever sim-lighting is
-// active so the user can see exactly where the virtual point light sits.
-// Position is updated in pixel space; CSS handles the show/hide via opacity.
+// Lightbulb cursor follower — only visible when sim-lighting is on AND the
+// cursor is over the bare shader background (not over the editor UI, not
+// over the preview card). When over UI / in preview, the native cursor is
+// restored so the user can interact normally. Both the bulb visibility
+// and the body's `cursor: none` are gated by the same JS check below so
+// they're always in sync.
 (() => {
   const lc = $('#lightCursor');
   if (!lc) return;
+  // Anything matching one of these selectors counts as "editor UI" — bulb
+  // hides, native cursor returns. Add new chrome elements here if needed.
+  const UI_SEL = [
+    '.modal',
+    '.fab-group',
+    '.picker',
+    '.picker-backdrop',
+    '.ctx',
+    '.toast',
+    '.chrome',
+    '.preview-root',  // entire preview surface, including the card
+  ].join(', ');
+
+  function setBulbState(showBulb){
+    lc.classList.toggle('visible', showBulb);
+    document.body.classList.toggle('light-bulb-active', showBulb);
+  }
+
   window.addEventListener('pointermove', (e) => {
-    if (!document.body.classList.contains('sim-lighting-on')) return;
-    lc.style.left = e.clientX + 'px';
-    lc.style.top  = e.clientY + 'px';
+    if (!document.body.classList.contains('sim-lighting-on')){
+      setBulbState(false);
+      return;
+    }
+    const overUI = !!(e.target && e.target.closest && e.target.closest(UI_SEL));
+    const inPreview = document.body.classList.contains('preview-mode');
+    const showBulb = !overUI && !inPreview;
+    setBulbState(showBulb);
+    if (showBulb){
+      lc.style.left = e.clientX + 'px';
+      lc.style.top  = e.clientY + 'px';
+    }
   }, { passive: true });
+
+  // Hide when the cursor leaves the window so a stale bulb doesn't linger.
+  document.addEventListener('pointerleave', () => setBulbState(false));
+  // Re-evaluate after toggling Lighting off so the bulb hides immediately.
+  $('#simLightBtn').addEventListener('click', () => {
+    if (!document.body.classList.contains('sim-lighting-on')) setBulbState(false);
+  });
 })();
 
 

@@ -583,8 +583,12 @@ body.ui-hidden .toast{
 }
 
 /* ---- light-cursor follower (Lighting button) ----
-   A small lightbulb icon glued to the cursor whenever sim-lighting is on,
-   so it's clear the cursor IS the virtual light source. Hidden otherwise. */
+   A small lightbulb icon glued to the cursor whenever sim-lighting is on
+   AND the cursor is over the bare shader background. Over UI (modal,
+   buttons, picker, preview card, etc.) the native cursor returns. JS
+   in main.js toggles `.visible` on the bulb and `.light-bulb-active`
+   on body — that pair drives both the icon visibility and the cursor
+   hide so the two never disagree. */
 .light-cursor{
   position:fixed;
   width:30px; height:30px;
@@ -595,11 +599,10 @@ body.ui-hidden .toast{
          drop-shadow(0 0 22px rgba(255, 195, 90, .55));
   opacity:0;
   transform:translate(-50%, -50%);
-  transition:opacity .15s ease;
+  transition:opacity .12s ease;
 }
-body.sim-lighting-on .light-cursor{ opacity:1; }
-body.sim-lighting-on,
-body.sim-lighting-on *{ cursor:none !important; }
+.light-cursor.visible{ opacity:1; }
+body.light-bulb-active{ cursor:none; }
 
 /* ---- marquee (drag-select rectangle) ---- */
 .marquee{
