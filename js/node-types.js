@@ -2063,6 +2063,34 @@ if (u_shadows > 0.5) {
       };
     },
   },
+  fresnel: {
+    category:'Effect', title:'Fresnel', desc:'edge-glow factor: pow(1 − |N·V|, power)',
+    info:'Edge-glow factor: `pow(1 - |N - V|, power)`. Approaches 1 at grazing angles and 0 facing the camera. The basis of rim lights, glass edge highlights, and any "glow at silhouettes" effect.',
+    inputs:[
+      {name:'normal', type:'vec3',  default:[0, 0, 1]},
+      {name:'view',   type:'vec3',  default:[0, 0, 1]},
+      {name:'power',  type:'float', default:2.5},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => {
+      const d = ctx.tmp('fdot');
+      return {
+        setup: `float ${d} = 1.0 - abs(dot(normalize(${ctx.inputs.normal}), normalize(${ctx.inputs.view})));`,
+        exprs:{ out: `pow(${d}, ${ctx.inputs.power})` },
+      };
+    },
+  },
+  refract: {
+    category:'Vector', title:'Refract', desc:'refract(V, N, eta)',
+    info:'Computes the refraction vector for an incident vector V, a surface normal N, and a ratio of indices of refraction (eta). Use to shift UVs for a "looking through glass" effect.',
+    inputs:[
+      {name:'view',   type:'vec3',  default:[0, 0, 1]},
+      {name:'normal', type:'vec3',  default:[0, 0, 1]},
+      {name:'eta',    type:'float', default:0.65},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    generate:(ctx) => ({ exprs:{ out: `refract(normalize(${ctx.inputs.view}), normalize(${ctx.inputs.normal}), ${ctx.inputs.eta})` } }),
+  },
   iridescence: {
     category:'Effect', title:'Iridescence', desc:'angle-shifting rainbow (oil/soap/crystal)',
     info:'Angle-shifting rainbow color, like soap bubbles or oil slicks. Uses N·V to compute the local viewing angle and maps it through a palette. Pair with SDF Normal or actual surface normals for crystal/gem looks.',
