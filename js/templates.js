@@ -1533,66 +1533,76 @@ function tplPixelSort(){
   const split  = n('splitVec2',  -1440,    0);
 
   // ---------- slot index ----------
-  // Increased to 800 slots for higher density and more random look
   const slots   = 800.0;
   const xMul   = n('multiply',   -1180, -180, {}, { b: slots });
   const slot   = n('floor',       -940, -180);
 
-  // distinct hash seeds per slot
+  // distinct hash seeds per slot (stable)
   const seedSp = n('add',         -700, -300, {}, { b: 11.0 });
   const seedHu = n('add',         -700, -180, {}, { b: 41.0 });
-  const seedJt = n('add',         -700,  -60, {}, { b: 71.0 });
+  const seedPh = n('add',         -700,  -60, {}, { b: 71.0 });
 
-  // per-slot speed in [0.6, 2.0] units/sec — slightly faster for more "melting" energy
+  // per-slot speed (stable)
   const speed  = n('random',      -440, -300,
     { mode:'decimal', precision: 4 },
     { min: 0.6, max: 2.0 });
 
-  // per-slot hue seed
+  // per-slot hue (stable)
   const hueSd  = n('random',      -440, -180,
     { mode:'decimal', precision: 4 },
     { min: 0.0, max: 1.0 });
 
-  // per-slot x jitter
-  const jitter = n('random',      -440,  -60,
+  // per-slot initial phase offset (stable)
+  const phaseO = n('random',      -440,  -60,
+    { mode:'decimal', precision: 4 },
+    { min: 0.0, max: 1.0 });
+
+  // ---------- timing & cycle (repositioning trigger) ----------
+  const tSpd   = n('multiply',    -180,  220);
+  const phaseR = n('add',           60,  220);
+  const cycle  = n('floor',        320,  340);
+  const phase  = n('fract',        320,  220);
+
+  // Seed for repositioning jitter: slot + cycle * 113
+  const cycScl = n('multiply',     580,  340, {}, { b: 113.0 });
+  const sjMix  = n('add',          840,  340);
+  const jitter = n('random',      1100,  340,
     { mode:'decimal', precision: 4 },
     { min: 0.05, max: 0.95 });
 
   // ---------- bar x center: (slot + jitter) / slots ----------
-  const sumSJ  = n('add',         -180,  -60);
-  const center = n('divide',         60,  -60, {}, { b: slots });
+  const sumSJ  = n('add',         1360,  340);
+  const center = n('divide',      1620,  340, {}, { b: slots });
 
   // ---------- xMask: very thin bar around centerX ----------
-  const dx     = n('subtract',     320,  -60);
-  const distX  = n('abs',          580,  -60);
-  // Extremely thin lines for "glitch art" feel
-  const xRamp  = n('smoothstep',   840,  -60, {}, { a: 0.0001, b: 0.0003 });
-  const xMask  = n('subtract',    1100,  -60, {}, { a: 1.0 });
+  const dx     = n('subtract',    1880,  340);
+  const distX  = n('abs',         2140,  340);
+  const xRamp  = n('smoothstep',  2400,  340, {}, { a: 0.0001, b: 0.0003 });
+  const xMask  = n('subtract',    2660,  340, {}, { a: 1.0 });
 
   // ---------- y mask: lit from top down to head ----------
-  const tSpd   = n('multiply',    -180,  220);
-  const phaseR = n('add',           60,  220);
-  const phase  = n('fract',        320,  220);
   const head   = n('subtract',     580,  220, {}, { a: 1.0 });
   const diff   = n('subtract',     840,  220);
   const yMask  = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.002 });
 
-  // ---------- textured color: modulate hue with FBM noise ----------
+  // ---------- textured color ----------
   const tTex   = n('time',       -700,  140, { scale: 0.5 });
   const texFbm = n('fbm',        -440,  140, { octaves: 4 });
   const texScl = n('multiply',   -180,  140, {}, { b: 0.2 });
   const texHue = n('add',          60, -180);
-
-  // hue → cosine palette
   const pal    = n('palette',      320, -240);
 
   // ---------- composite ----------
-  const bright = n('multiply',    1360,   80);
-  const litCol = n('mix',         1620,    0);
-  const sat    = n('saturation',  1880,    0, {}, { scale: 1.8 });
+  // Drip brightness: grows as head descends
+  const dripBr = n('multiply',    1360,   80);
+  // Base brightness: ensure lines don't disappear (leave a faint static trail)
+  const baseBr = n('multiply',    1360,  -60, {}, { b: 0.15 });
+  const totalB = n('max',         1620,   80);
 
-  // Output with bloom for that "vibrant" glow
-  const out    = n('output',      2120,    0, {
+  const litCol = n('mix',         1880,    0);
+  const sat    = n('saturation',  2140,    0, {}, { scale: 1.8 });
+
+  const out    = n('output',      2400,    0, {
     bloom:          'on',
     bloomThreshold: 0.2,
     bloomRadius:    2.5,
@@ -1606,13 +1616,27 @@ function tplPixelSort(){
   c(split, 'x',   xMul,  'a');
   c(xMul,  'out', slot,  'x');
 
-  // per-slot hashes
+  // stable hashes
   c(slot,  'out', seedSp, 'a');
   c(slot,  'out', seedHu, 'a');
-  c(slot,  'out', seedJt, 'a');
+  c(slot,  'out', seedPh, 'a');
   c(seedSp,'out', speed,  'seed');
   c(seedHu,'out', hueSd,  'seed');
-  c(seedJt,'out', jitter, 'seed');
+  c(seedPh,'out', phaseO, 'seed');
+
+  // timing & cycle
+  c(tDrip,  'out', tSpd,   'a');
+  c(speed,  'out', tSpd,   'b');
+  c(tSpd,   'out', phaseR, 'a');
+  c(phaseO, 'out', phaseR, 'b');
+  c(phaseR, 'out', cycle,  'x');
+  c(phaseR, 'out', phase,  'x');
+
+  // repositioning jitter
+  c(cycle,  'out', cycScl, 'a');
+  c(slot,   'out', sjMix,  'a');
+  c(cycScl, 'out', sjMix,  'b');
+  c(sjMix,  'out', jitter, 'seed');
 
   // bar x center
   c(slot,   'out', sumSJ,  'a');
@@ -1627,17 +1651,12 @@ function tplPixelSort(){
   c(xRamp,  'out', xMask,  'b');
 
   // yMask
-  c(tDrip,  'out', tSpd,   'a');
-  c(speed,  'out', tSpd,   'b');
-  c(tSpd,   'out', phaseR, 'a');
-  c(jitter, 'out', phaseR, 'b');
-  c(phaseR, 'out', phase,  'x');
   c(phase,  'out', head,   'b');
   c(split,  'y',   diff,   'a');
   c(head,   'out', diff,   'b');
   c(diff,   'out', yMask,  'x');
 
-  // textured color wiring
+  // textured color
   c(uv,      'out', texFbm, 'p');
   c(tTex,    'out', texFbm, 'z');
   c(texFbm,  'out', texScl, 'a');
@@ -1646,11 +1665,16 @@ function tplPixelSort(){
   c(texHue,  'out', pal,    't');
 
   // composite
-  c(xMask,  'out', bright, 'a');
-  c(yMask,  'out', bright, 'b');
+  c(xMask,  'out', dripBr, 'a');
+  c(yMask,  'out', dripBr, 'b');
+
+  c(xMask,  'out', baseBr, 'a');
+
+  c(dripBr, 'out', totalB, 'a');
+  c(baseBr, 'out', totalB, 'b');
 
   c(pal,    'out', litCol, 'b');
-  c(bright, 'out', litCol, 't');
+  c(totalB, 'out', litCol, 't');
 
   c(litCol, 'out', sat, 'rgb');
   c(sat,    'out', out, 'color');
