@@ -1050,6 +1050,12 @@ function renderFlagBody(node, nodeEl, bodyEl){
   bodyEl.classList.add('flag-body');
   const numIn  = node.params.numInputs  || 0;
   const numOut = node.params.numOutputs || 0;
+  // Pull the actual socket types from the node spec so Flag (Float) and
+  // Flag (Vec2) variants render with the correct sockType — otherwise the
+  // wire validator (strict type-equality) refuses to connect floats/vec2s
+  // to a flag body that's hardcoded vec3.
+  const inputSpec  = getNodeInputs(node);
+  const outputSpec = getNodeOutputs(node);
 
   // Toolbar: +/- buttons for input and output counts.
   const toolbar = document.createElement('div');
@@ -1105,7 +1111,7 @@ function renderFlagBody(node, nodeEl, bodyEl){
     ext.dataset.nodeId   = node.id;
     ext.dataset.socket   = `in${i}`;
     ext.dataset.dir      = 'in';
-    ext.dataset.sockType = 'vec3';
+    ext.dataset.sockType = (inputSpec[i] && inputSpec[i].type) || 'vec3';
     if (isSocketConnected(node.id, 'in', `in${i}`)) ext.classList.add('connected');
     row.appendChild(ext);
 
@@ -1191,7 +1197,7 @@ function renderFlagBody(node, nodeEl, bodyEl){
     ext.dataset.nodeId   = node.id;
     ext.dataset.socket   = `out${j}`;
     ext.dataset.dir      = 'out';
-    ext.dataset.sockType = 'vec3';
+    ext.dataset.sockType = (outputSpec[j] && outputSpec[j].type) || 'vec3';
     if (isSocketConnected(node.id, 'out', `out${j}`)) ext.classList.add('connected');
     row.appendChild(ext);
 
