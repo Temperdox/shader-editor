@@ -233,6 +233,18 @@ float sdfCrystal(vec2 p, vec2 size){
 
   return s * sqrt(d);
 }`,
+  heightToNormal: `
+/* Heightfield -> tangent-space normal, the textbook way. Treats the float
+   input as a real height value at the current pixel; takes screen-space
+   derivatives to get the slope; returns a normal that points +Z on flat
+   ground and tilts toward the downhill direction on slopes. Multiply by
+   strength to dial the relief (higher = more dramatic bumps). Use for
+   any explicit scalar heightfield (voronoi*id for a faceted lattice,
+   fbm for terrain, etc.) when you want lighting to follow real geometry. */
+vec3 heightToNormal(float h, float strength){
+  vec2 g = vec2(dFdx(h), dFdy(h));
+  return normalize(vec3(-g.x * strength, -g.y * strength, 1.0));
+}`,
   sdfNormal3D: `
 /* SDF → fake-3D surface normal. Uses screen-space derivatives to get the
    SDF gradient, then builds a normal that bulges up in +Z at the surface
@@ -1486,6 +1498,20 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
     extensions:['GL_OES_standard_derivatives'],
     generate:(ctx) => ({ exprs:{
       out: `sdfNormal3D(${ctx.inputs.sd}, ${ctx.inputs.bulge})`,
+    } }),
+  },
+  heightNormal: {
+    category:'Pattern', title:'Height → Normal', desc:'derive a 3D normal from a scalar heightfield',
+    info:'Treats the input float as a height value at the current pixel and derives a tangent-space normal via screen-space derivatives: `normal = normalize(vec3(-dh/dx, -dh/dy, 1.0)) * strength`. Peaks face +Z (catch the most light), slopes tilt toward downhill. Use whenever you have a custom heightfield (voronoi*id for a faceted lattice, fbm for terrain, multiplied scalars for any geometric shape) and want lighting to actually follow the geometry — different from SDF Normal which interprets its input as a signed distance and bulges where sd<0. Higher strength = more dramatic relief.',
+    inputs:[
+      {name:'height',   type:'float', default:0},
+      {name:'strength', type:'float', default:1.0},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    helpers:['heightToNormal'],
+    extensions:['GL_OES_standard_derivatives'],
+    generate:(ctx) => ({ exprs:{
+      out: `heightToNormal(${ctx.inputs.height}, ${ctx.inputs.strength})`,
     } }),
   },
   voronoi: {

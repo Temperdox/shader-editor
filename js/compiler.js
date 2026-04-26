@@ -216,6 +216,7 @@ function compileGraph(){
     sdfTriangle: 0,
     sdfCrystal:  1,   // depends on sdfHexagon + sdfTriangle
     sdfNormal3D: 0,
+    heightToNormal: 0,
   };
   const preludeHelpers = [...helpers]
     .sort((a, b) => (HELPER_RANK[a] ?? 9) - (HELPER_RANK[b] ?? 9))
