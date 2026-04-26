@@ -1595,7 +1595,10 @@ function tplPixelSort(){
 
   // ---------- seamless swap composite ----------
   // Above head = New line; Below head = Old line.
-  const bright = n('mix',         2700,  400);
+  // bright is FLOAT-valued (combining two float xMasks) so it must use Lerp,
+  // not Mix. (Mix is the vec3 lerp; using it on float inputs produces a
+  // float expression assigned to a vec3 var → "dimension mismatch" error.)
+  const bright = n('lerp',        2700,  400);
   const litCol = n('mix',         2960,  400);
 
   // ---------- vertical texture: stretched FBM ----------
