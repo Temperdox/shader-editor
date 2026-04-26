@@ -1564,21 +1564,21 @@ function tplPixelSort(){
   const jitterP = n('random',      1100,  460, { mode:'decimal', precision: 4 }, { min: 0.05, max: 0.95 });
 
   // ---------- dual xMasks ----------
+  // Step replaces the prior smoothstep+subtract pair. step(edge=distX, x=BAR_HALF)
+  // returns 1 when distX <= BAR_HALF (inside the bar), 0 outside — hard glitch edge.
   const mkXMask = (x, y, j) => {
-    const s = n('add', x, y);
-    const d = n('divide', x + 240, y, {}, { b: slots });
-    const dx = n('subtract', x + 480, y);
-    const ax = n('abs', x + 720, y);
-    const rm = n('smoothstep', x + 960, y, {}, { a: 0.0003, b: 0.0007 });
-    const mk = n('subtract', x + 1220, y, {}, { a: 1.0 });
-    c(slot, 'out', s, 'a');
-    c(j, 'out', s, 'b');
-    c(s, 'out', d, 'a');
-    c(split, 'x', dx, 'a');
-    c(d, 'out', dx, 'b');
-    c(dx, 'out', ax, 'x');
-    c(ax, 'out', rm, 'x');
-    c(rm, 'out', mk, 'b');
+    const s  = n('add',      x,        y);
+    const d  = n('divide',   x + 240,  y, {}, { b: slots });
+    const dx = n('subtract', x + 480,  y);
+    const ax = n('abs',      x + 720,  y);
+    const mk = n('step',     x + 960,  y, {}, { x: 0.0005 });   // bar half-width
+    c(slot, 'out', s,  'a');
+    c(j,    'out', s,  'b');
+    c(s,    'out', d,  'a');
+    c(split,'x',   dx, 'a');
+    c(d,    'out', dx, 'b');
+    c(dx,   'out', ax, 'x');
+    c(ax,   'out', mk, 'edge');
     return mk;
   };
 
@@ -1587,7 +1587,11 @@ function tplPixelSort(){
 
   // ---------- y mask head (1 -> 0 dripping down) ----------
   const head   = n('subtract',     580,  220, {}, { a: 1.0 });
-  const splitY = n('smoothstep',   840,  220, {}, { a: 0.0, b: 0.005 });
+  // Snap the head to 60 discrete y-tiers so the line descends in glitchy
+  // VHS-scanline jumps instead of sliding smoothly. The seamless swap below
+  // still works because splitY just reads whatever head value is current.
+  const headQ  = n('posterizeFloat', 840, 220, {}, { levels: 60 });
+  const splitY = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.005 });
 
   // ---------- seamless swap composite ----------
   // Above head = New line; Below head = Old line.
@@ -1645,10 +1649,12 @@ function tplPixelSort(){
   c(cycSclP,'out', sjMixP,  'b');
   c(sjMixP, 'out', jitterP, 'seed');
 
-  // split at head: phase 0 (top) to 1 (bottom)
-  c(phase,  'out', head,   'b');
-  c(split,  'y',   splitY, 'a');
-  c(head,   'out', splitY, 'b');
+  // split at head: phase 0 (top) to 1 (bottom). Head goes through Posterize Float
+  // first, snapping it to 60 discrete steps as it descends.
+  c(phase, 'out', head,   'b');
+  c(head,  'out', headQ,  'x');
+  c(split, 'y',   splitY, 'a');
+  c(headQ, 'out', splitY, 'b');
 
   // mix: above head (splitY=1) -> xMask; below head (splitY=0) -> xMaskP
   c(xMaskP, 'out', bright, 'a');
