@@ -1503,119 +1503,150 @@ function tplPixelFlow(){
   c(post,  'out', out,   'color');
 }
 
-/* ---- Pixel Sort — Matrix-rain drops cascading from top to bottom ---- */
-/* Each screen column gets its own falling drops at a per-column random speed
- * and color. The mechanics:
- *   - floor(x * COLS) quantizes x into discrete column indices
- *   - Random(col) gives stable per-column speed + hue
- *   - fract(y * REPEAT + time * speed) is a sawtooth that cycles downward
- *     as time advances; with REPEAT > 1 there are many drops per column
- *   - smoothstep(0.88, 0.92, 1 - drop) is the hard-edged drop mask:
- *     a constant-brightness band whose thickness is (1 - 0.90) / REPEAT.
- *   The result is hundreds of small constant-brightness colored bars
- *   continuously spawning at the top of each column and falling to the
- *   bottom at column-specific speeds. */
+/* ---- Pixel Sort — Matrix-rain lines growing from top to bottom ---- */
+/* Each "slot" (a coarse column cell) hosts ONE thin vertical bar at a
+ * per-cell-random x position. The bar grows continuously from the top of
+ * the screen down to a head position that descends as time advances; when
+ * the head reaches the bottom, the cycle resets and a new bar spawns at
+ * the top.
+ *   - floor(x * SLOTS) gives a slot index. SLOTS controls how many
+ *     simultaneous bars can exist (one per slot).
+ *   - Random(slot) gives stable per-slot speed, hue, and an x-jitter so
+ *     bars sit at random positions within each slot (no visible grid).
+ *   - centerX = (slot + jitter) / SLOTS gives the bar's actual x.
+ *   - xMask = 1 if |x - centerX| < BAR_HALF, with a small AA edge → very
+ *     thin bar.
+ *   - phase = fract(time * speed + jitter), head = 1 - phase
+ *   - yMask = 1 if y >= head (so the lit region spans top-of-screen down
+ *     to head; as head descends, the line grows).
+ *   - bright = xMask * yMask, color = palette(hue) — full-saturation
+ *     constant brightness inside the line, black elsewhere. */
 function tplPixelSort(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
   // sources
-  const uv     = n('uv',         -1500,    0);
-  const tDrip  = n('time',       -1500,  240, { scale: 1.0 });
+  const uv     = n('uv',         -1700,    0);
+  const tDrip  = n('time',       -1700,  280, { scale: 1.0 });
 
   // split UV into x, y in [0, 1]
-  const split  = n('splitVec2',  -1240,    0);
+  const split  = n('splitVec2',  -1440,    0);
 
-  // ---------- per-column index ----------
-  // x * 300 → 300 narrow columns across screen, then floor → integer column id
-  const xCol   = n('multiply',    -980, -160, {}, { b: 300.0 });
-  const col    = n('floor',       -720, -160);
+  // ---------- slot index ----------
+  // 80 slots across screen → one bar per slot at any time. Each slot is
+  // 1/80 of width; the bar inside it can be at any x within that range.
+  const xMul   = n('multiply',   -1180, -180, {}, { b: 80.0 });
+  const slot   = n('floor',       -940, -180);
 
-  // distinct seeds per random call (rngHash3 inside Random combines seed +
-  // seedUV + seedVec3 — adding a different prime to col gives independent hashes)
-  const colSp  = n('add',         -460, -260, {}, { b: 11.0 });
-  const colHu  = n('add',         -460, -100, {}, { b: 41.0 });
+  // distinct hash seeds per slot
+  const seedSp = n('add',         -700, -300, {}, { b: 11.0 });
+  const seedHu = n('add',         -700, -180, {}, { b: 41.0 });
+  const seedJt = n('add',         -700,  -60, {}, { b: 71.0 });
 
-  // per-column drop speed in [0.3, 2.0] units/sec — wide variation so drops
-  // spawn continuously instead of in lockstep
-  const speed  = n('random',      -200, -260,
+  // per-slot speed in [0.4, 1.6] units/sec — wide range so cycles stagger
+  const speed  = n('random',      -440, -300,
     { mode:'decimal', precision: 4 },
-    { min: 0.3, max: 2.0 });
+    { min: 0.4, max: 1.6 });
 
-  // per-column hue seed in [0, 1] for the cosine palette
-  const hueSd  = n('random',      -200, -100,
+  // per-slot hue seed → cosine palette
+  const hueSd  = n('random',      -440, -180,
     { mode:'decimal', precision: 4 },
-    { min: 0.0,  max: 1.0 });
+    { min: 0.0, max: 1.0 });
 
-  // ---------- animated y per column ----------
-  // y * 25 → 25 simultaneous drops per column (lots of bars, thin in y)
-  const yRep   = n('multiply',    -460,  100, {}, { b: 25.0 });
-  // tSpd = time * speed (per-column scroll velocity)
-  const tSpd   = n('multiply',    -200,  240);
-  // yAn = y*25 + tSpd → cycles downward as time advances
-  const yAn    = n('add',           60,  140);
+  // per-slot x jitter in [0.1, 0.9] — places the bar randomly within its
+  // slot so there's no visible vertical grid
+  const jitter = n('random',      -440,  -60,
+    { mode:'decimal', precision: 4 },
+    { min: 0.1, max: 0.9 });
 
-  // drop position within each band — sawtooth in [0, 1]
-  const drop   = n('fract',        320,  140);
+  // ---------- bar x center: (slot + jitter) / 80 ----------
+  const sumSJ  = n('add',         -180,  -60);
+  const center = n('divide',         60,  -60, {}, { b: 80.0 });
 
-  // 1 - drop puts the head of each drop at value 1.0
-  const inv    = n('subtract',     580,  140, {}, { a: 1.0 });
+  // ---------- xMask: thin bar around centerX ----------
+  const dx     = n('subtract',     320,  -60);     // x - centerX
+  const distX  = n('abs',          580,  -60);
+  // smoothstep(0.0015, 0.0022, distX) → 0 inside bar, 1 outside.
+  // Inverted via subtract from 1 below. Bar half-width ≈ 4-5px on 3000-wide.
+  const xRamp  = n('smoothstep',   840,  -60, {}, { a: 0.0015, b: 0.0022 });
+  const xMask  = n('subtract',    1100,  -60, {}, { a: 1.0 });
 
-  // CONSTANT-BRIGHTNESS mask (no fade): smoothstep with a narrow [0.88, 0.92]
-  // window. Inside the band brightness = 1, outside = 0, with a 1-pixel
-  // anti-aliased edge between. Drop thickness in screen space:
-  // (1 - 0.90) / 25 ≈ 0.4% of screen height (a few pixels).
-  const bright = n('smoothstep',   840,  140, {}, { a: 0.88, b: 0.92 });
-
-  // ---------- per-column color ----------
-  const pal    = n('palette',      320, -100);
+  // ---------- y mask: lit from top down to head ----------
+  // tSpd = time * speed
+  const tSpd   = n('multiply',    -180,  220);
+  // phaseRaw = tSpd + jitter (jitter doubles as per-slot phase offset)
+  const phaseR = n('add',           60,  220);
+  const phase  = n('fract',        320,  220);
+  // head_y = 1 - phase (top at start of cycle, bottom at end)
+  const head   = n('subtract',     580,  220, {}, { a: 1.0 });
+  // diff = y - head_y (positive when above head, negative when below)
+  const diff   = n('subtract',     840,  220);
+  // yMask = 1 if y >= head (line spans from top down to head)
+  const yMask  = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.005 });
 
   // ---------- composite ----------
-  // mix(black, color, bright) = color where the band is, black elsewhere.
-  const litCol = n('mix',         1100,    0);
+  const bright = n('multiply',    1360,   80);     // xMask * yMask
 
-  // pump saturation so the bars read as bold, vivid lines
-  const sat    = n('saturation',  1340,    0, {}, { scale: 1.5 });
+  // hue → cosine palette
+  const pal    = n('palette',      320, -240);
 
-  const out    = n('output',      1580,    0);
+  // mix(black, color, bright) = color * bright. Constant brightness inside.
+  const litCol = n('mix',         1620,    0);
+
+  // pump saturation so the bars stay vivid
+  const sat    = n('saturation',  1880,    0, {}, { scale: 1.4 });
+
+  const out    = n('output',      2120,    0);
 
   // ---------- wiring ----------
   c(uv,    'out', split, 'v');
 
-  // column index from x
-  c(split, 'x',   xCol,  'a');
-  c(xCol,  'out', col,   'x');
+  // slot index
+  c(split, 'x',   xMul,  'a');
+  c(xMul,  'out', slot,  'x');
 
-  // per-column random seeds
-  c(col,   'out', colSp, 'a');
-  c(col,   'out', colHu, 'a');
-  c(colSp, 'out', speed, 'seed');
-  c(colHu, 'out', hueSd, 'seed');
+  // per-slot hashes
+  c(slot,  'out', seedSp, 'a');
+  c(slot,  'out', seedHu, 'a');
+  c(slot,  'out', seedJt, 'a');
+  c(seedSp,'out', speed,  'seed');
+  c(seedHu,'out', hueSd,  'seed');
+  c(seedJt,'out', jitter, 'seed');
 
-  // y → y * 25 (more drops per column)
-  c(split, 'y',   yRep,  'a');
+  // bar x center = (slot + jitter) / 80
+  c(slot,   'out', sumSJ,  'a');
+  c(jitter, 'out', sumSJ,  'b');
+  c(sumSJ,  'out', center, 'a');
 
-  // time × speed → animated offset
-  c(tDrip, 'out', tSpd,  'a');
-  c(speed, 'out', tSpd,  'b');
+  // xMask: 1 inside thin bar, 0 outside
+  c(split,  'x',   dx,     'a');
+  c(center, 'out', dx,     'b');
+  c(dx,     'out', distX,  'x');
+  c(distX,  'out', xRamp,  'x');
+  c(xRamp,  'out', xMask,  'b');     // 1 - smoothstep(...)
 
-  // yAn = y*25 + time*speed
-  c(yRep,  'out', yAn,   'a');
-  c(tSpd,  'out', yAn,   'b');
+  // yMask: line from top of screen down to descending head
+  c(tDrip,  'out', tSpd,   'a');
+  c(speed,  'out', tSpd,   'b');
+  c(tSpd,   'out', phaseR, 'a');
+  c(jitter, 'out', phaseR, 'b');     // phase offset varies per slot too
+  c(phaseR, 'out', phase,  'x');
+  c(phase,  'out', head,   'b');     // head = 1 - phase
+  c(split,  'y',   diff,   'a');
+  c(head,   'out', diff,   'b');     // diff = y - head
+  c(diff,   'out', yMask,  'x');     // 1 if diff > 0.005, 0 if diff < 0
 
-  // sawtooth → invert → constant-brightness mask
-  c(yAn,   'out', drop,   'x');
-  c(drop,  'out', inv,    'b');    // a=1 default → 1 - drop
-  c(inv,   'out', bright, 'x');    // a=0.88, b=0.92 defaults → hard-edge band
+  // bright = xMask * yMask
+  c(xMask,  'out', bright, 'a');
+  c(yMask,  'out', bright, 'b');
 
-  // hue seed → palette color
-  c(hueSd, 'out', pal, 't');
+  // color
+  c(hueSd,  'out', pal,    't');
+  c(pal,    'out', litCol, 'b');     // a = black default
+  c(bright, 'out', litCol, 't');
 
-  // shade color by mask, saturate, output
-  c(pal,   'out', litCol, 'b');    // a=black default
-  c(bright,'out', litCol, 't');
-  c(litCol,'out', sat,    'rgb');
-  c(sat,   'out', out,    'color');
+  c(litCol, 'out', sat, 'rgb');
+  c(sat,    'out', out, 'color');
 }
 
 /* ---- Cosmic Star — Soft Glow + Starburst + HDR Boost ---- */
