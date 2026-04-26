@@ -92,6 +92,107 @@ $('#shadowsBtn').addEventListener('click', () => {
 })();
 
 
+// Save Video — records the bg canvas via captureStream + MediaRecorder.
+// Tries MP4/H.264 first (the user-requested format), falls back to WebM if
+// the browser can't muxer MP4 (Firefox can't, Chrome/Edge usually can).
+// Toggle: first click starts; second click stops + downloads the file. The
+// button shows the elapsed time while recording so the user knows it's live.
+(() => {
+  const btn = $('#saveVideoBtn');
+  if (!btn) return;
+  const label = btn.querySelector('.save-video-label');
+  let recorder = null;
+  let chunks = [];
+  let pickedMime = '';
+  let pickedExt  = 'webm';
+  let timerId    = null;
+  let startTs    = 0;
+
+  function pickMime(){
+    if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return null;
+    const candidates = [
+      ['video/mp4;codecs=avc1.42E01E', 'mp4'],   // H.264 baseline — most compatible MP4
+      ['video/mp4;codecs=avc1',        'mp4'],
+      ['video/mp4',                    'mp4'],
+      ['video/webm;codecs=vp9',        'webm'],
+      ['video/webm;codecs=vp8',        'webm'],
+      ['video/webm',                   'webm'],
+    ];
+    for (const [m, e] of candidates){
+      if (MediaRecorder.isTypeSupported(m)) return { mime: m, ext: e };
+    }
+    return null;
+  }
+
+  function startRecording(){
+    if (typeof MediaRecorder === 'undefined'){
+      toast('MediaRecorder unsupported in this browser', 'err');
+      return;
+    }
+    const canvas = (renderer && renderer.canvas) || $('#bgShader');
+    if (!canvas){ toast('canvas not ready', 'err'); return; }
+    if (typeof canvas.captureStream !== 'function'){
+      toast('canvas.captureStream unsupported', 'err');
+      return;
+    }
+    const picked = pickMime();
+    if (!picked){ toast('no supported video codec', 'err'); return; }
+    pickedMime = picked.mime;
+    pickedExt  = picked.ext;
+    chunks = [];
+
+    const stream = canvas.captureStream(60);
+    try {
+      recorder = new MediaRecorder(stream, { mimeType: pickedMime });
+    } catch (err){
+      console.error(err);
+      toast('recorder init failed', 'err');
+      return;
+    }
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: pickedMime || 'video/webm' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      a.download = `shader-${ts}.${pickedExt}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      toast(`saved ${pickedExt.toUpperCase()} video`);
+    };
+
+    recorder.start(250);   // request a chunk every 250ms (smoother seeking)
+    btn.classList.add('recording');
+    startTs = performance.now();
+    if (label) label.textContent = 'STOP 0:00';
+    timerId = setInterval(() => {
+      const elapsed = Math.floor((performance.now() - startTs) / 1000);
+      const m = Math.floor(elapsed / 60);
+      const s = elapsed % 60;
+      if (label) label.textContent = `STOP ${m}:${String(s).padStart(2, '0')}`;
+    }, 250);
+  }
+
+  function stopRecording(){
+    if (!recorder || recorder.state === 'inactive') return;
+    recorder.stop();
+    btn.classList.remove('recording');
+    if (timerId){ clearInterval(timerId); timerId = null; }
+    if (label) label.textContent = 'Save Video';
+  }
+
+  btn.addEventListener('click', () => {
+    if (recorder && recorder.state !== 'inactive') stopRecording();
+    else startRecording();
+  });
+})();
+
 // Save shader as PNG — downloads the current bgShader canvas. Requires
 // `preserveDrawingBuffer: true` on the WebGL context (set in renderer.js).
 $('#saveBtn').addEventListener('click', () => {

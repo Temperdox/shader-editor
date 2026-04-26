@@ -569,6 +569,18 @@ body::after{
   color:#ffe7b3;
   box-shadow:0 0 0 1px rgba(255,205,120,.35) inset, 0 0 18px rgba(255,205,120,.2);
 }
+/* Recording-state glow on the Save Video fab — red so it's unmistakable
+   the canvas is being captured. */
+.fab-group .save-fab.recording{
+  border-color:rgba(255,100,100,.85);
+  color:#ffc4c4;
+  box-shadow:0 0 0 1px rgba(255,100,100,.4) inset, 0 0 22px rgba(255,80,80,.35);
+  animation:save-rec-pulse 1.5s ease-in-out infinite;
+}
+@keyframes save-rec-pulse{
+  0%, 100%{ box-shadow:0 0 0 1px rgba(255,100,100,.4) inset, 0 0 18px rgba(255,80,80,.25); }
+  50%     { box-shadow:0 0 0 1px rgba(255,100,100,.6) inset, 0 0 28px rgba(255,80,80,.55); }
+}
 
 /* ---- UI-hidden state (toggled by the Hide button) ----
    Keeps the shader background + the fab group itself visible; hides
