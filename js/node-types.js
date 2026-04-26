@@ -777,6 +777,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
      thinking about it as multiplication. */
   strength: {
     category:'Effect', title:'Strength', desc:'scale a vec3 (color/normal) by a strength amount',
+    info:'Dial the contribution of any vec3 connection (color, normal, palette output) up or down without rewiring. strength=1 passes through, 0 mutes the input, 0.5 halves it, 2.0 doubles it. Drop one between any color source and its destination Mix/Blend node when the effect is too strong or too weak.',
     inputs:[
       {name:'in',       type:'vec3',  default:[0,0,0]},
       {name:'strength', type:'float', default:1},

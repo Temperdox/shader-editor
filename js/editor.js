@@ -42,8 +42,21 @@ function renderNode(node){
   header.className = 'node-header';
   header.innerHTML = `
     <div class="node-title">${escapeHTML(def.title)}</div>
-    <div class="node-cat">${escapeHTML(def.category)}</div>
+    <div class="node-header-meta">
+      <div class="node-cat">${escapeHTML(def.category)}</div>
+      <button class="node-info-btn" type="button" title="Module info" aria-label="Module info">i</button>
+    </div>
   `;
+  // Info button: open the per-node info modal. Stop propagation so the click
+  // doesn't trigger node selection or start a header drag.
+  const infoBtn = header.querySelector('.node-info-btn');
+  infoBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  infoBtn.addEventListener('mousedown',   (e) => e.stopPropagation());
+  infoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (typeof openNodeInfoModal === 'function') openNodeInfoModal(node);
+  });
   el.appendChild(header);
 
   const body = document.createElement('div');
@@ -1527,3 +1540,115 @@ function layerStackSetCount(node, target){
   scheduleRecompile();
   pushHistory();
 }
+
+/* ---------------- node info modal ----------------
+ * Opened by clicking the small "i" button in any node header. Renders the
+ * node type's description, optional `info` field (use cases / longer doc),
+ * and auto-generated tables of inputs, outputs, and parameters.
+ *
+ * Node types can supply richer documentation by adding an `info` string
+ * to their NODE_TYPES entry — anything not present falls back to the
+ * built-in `desc` field. Inputs/outputs/params come straight from the
+ * node spec via getNodeInputs / getNodeOutputs, so dynamic-schema nodes
+ * (Flag, Layer Stack) display their current shape correctly. */
+const nodeInfoModal = $('#nodeInfoModal');
+const nodeInfoBack  = $('#nodeInfoBack');
+const nodeInfoTitle = $('#nodeInfoTitle');
+const nodeInfoCat   = $('#nodeInfoCat');
+const nodeInfoBody  = $('#nodeInfoBody');
+const nodeInfoClose = $('#nodeInfoCloseBtn');
+
+function fmtDefault(v){
+  if (v === undefined || v === null) return '';
+  if (Array.isArray(v))  return `[${v.map(x => Number(x).toFixed(2)).join(', ')}]`;
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  return String(v);
+}
+function ioRowsHTML(items, includeDefault){
+  let html = '<div class="ni-iolist">';
+  for (const it of items){
+    const def = includeDefault && it.default !== undefined
+      ? `<span class="ni-io-def">default: ${escapeHTML(fmtDefault(it.default))}</span>`
+      : '<span></span>';
+    html += `
+      <div class="ni-io">
+        <span class="ni-io-name">${escapeHTML(it.name)}</span>
+        <span class="ni-io-type">${escapeHTML(it.type || it.kind || '')}</span>
+        ${def}
+      </div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function openNodeInfoModal(node){
+  if (!nodeInfoModal) return;
+  const def = NODE_TYPES[node.type];
+  if (!def) return;
+
+  nodeInfoTitle.textContent = def.title || node.type;
+  nodeInfoCat.textContent   = (def.category || '').toUpperCase();
+
+  const sections = [];
+  // Description (always present)
+  if (def.desc){
+    sections.push(`
+      <div class="ni-section">
+        <div class="ni-section-title">Description</div>
+        <div class="ni-section-body">${escapeHTML(def.desc)}</div>
+      </div>`);
+  }
+  // Use Cases / extended info (optional per-node)
+  if (def.info){
+    sections.push(`
+      <div class="ni-section">
+        <div class="ni-section-title">Use Cases</div>
+        <div class="ni-section-body">${escapeHTML(def.info)}</div>
+      </div>`);
+  }
+  // Inputs
+  const inputs = getNodeInputs(node);
+  if (inputs.length){
+    sections.push(`
+      <div class="ni-section">
+        <div class="ni-section-title">Inputs</div>
+        ${ioRowsHTML(inputs, true)}
+      </div>`);
+  }
+  // Outputs
+  const outputs = getNodeOutputs(node);
+  if (outputs.length){
+    sections.push(`
+      <div class="ni-section">
+        <div class="ni-section-title">Outputs</div>
+        ${ioRowsHTML(outputs, false)}
+      </div>`);
+  }
+  // Parameters (skip hidden ones)
+  const params = (def.params || []).filter(p => p.kind !== 'hidden');
+  if (params.length){
+    sections.push(`
+      <div class="ni-section">
+        <div class="ni-section-title">Parameters</div>
+        ${ioRowsHTML(params, true)}
+      </div>`);
+  }
+
+  nodeInfoBody.innerHTML = sections.join('');
+  nodeInfoModal.classList.add('open');
+  nodeInfoBack.classList.add('open');
+}
+
+function closeNodeInfoModal(){
+  if (!nodeInfoModal) return;
+  nodeInfoModal.classList.remove('open');
+  nodeInfoBack.classList.remove('open');
+}
+
+if (nodeInfoBack)  nodeInfoBack.addEventListener('click', closeNodeInfoModal);
+if (nodeInfoClose) nodeInfoClose.addEventListener('click', closeNodeInfoModal);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && nodeInfoModal && nodeInfoModal.classList.contains('open')){
+    closeNodeInfoModal();
+  }
+});
