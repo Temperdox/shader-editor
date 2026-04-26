@@ -1701,8 +1701,11 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
       const br = glslNum(ctx.params.blurRadius);
       const fs = glslNum(ctx.params.fadeStart);
       const mr = glslNum(ctx.params.mergeRadius);
+      // Wrap structure: `((SUM) * 0.2)` for the 5-tap average. Invert flips
+      // the outer paren to `(1.0 - (SUM) * 0.2)`. Both invPrefix opens TWO
+      // parens (outer + sum-grouping), so the suffix must close TWO.
       const invPrefix = ctx.params.invert === 'yes' ? '(1.0 - (' : '((';
-      const invSuffix = ctx.params.invert === 'yes' ? ') * 0.2)' : ' * 0.2)';
+      const invSuffix = ') * 0.2)';
 
       // 5-tap cross-pattern blurred height sample, baked inline.
       const sampleH = (uvExpr) =>
