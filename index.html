@@ -157,6 +157,88 @@
   </div>
 </div>
 
+<!-- ---- save video settings modal ---- -->
+<div class="picker-backdrop" id="saveVideoBack"></div>
+<div class="picker save-video-modal" id="saveVideoModal" role="dialog" aria-modal="true">
+  <div class="picker-head">
+    <h3>Save Video</h3>
+    <input class="picker-search" id="svFilename" placeholder="File name" autocomplete="off" />
+  </div>
+  <div class="sv-body">
+    <div class="sv-grid">
+      <div class="sv-section sv-preview-section">
+        <div class="sv-row-label">Crop Preview</div>
+        <div class="sv-preview-wrap" id="svPreviewWrap">
+          <canvas class="sv-preview-canvas" id="svPreviewCanvas"></canvas>
+          <div class="sv-crop" id="svCrop">
+            <div class="sv-crop-handle nw" data-h="nw"></div>
+            <div class="sv-crop-handle n"  data-h="n"></div>
+            <div class="sv-crop-handle ne" data-h="ne"></div>
+            <div class="sv-crop-handle e"  data-h="e"></div>
+            <div class="sv-crop-handle se" data-h="se"></div>
+            <div class="sv-crop-handle s"  data-h="s"></div>
+            <div class="sv-crop-handle sw" data-h="sw"></div>
+            <div class="sv-crop-handle w"  data-h="w"></div>
+          </div>
+        </div>
+        <div class="sv-crop-info" id="svCropInfo">—</div>
+      </div>
+
+      <div class="sv-section sv-settings-section">
+        <div class="sv-row-label">Aspect Ratio</div>
+        <div class="sv-presets" id="svAspectPresets">
+          <button class="sv-preset active" data-ar="full" type="button">Full</button>
+          <button class="sv-preset" data-ar="16:9"  type="button">16:9</button>
+          <button class="sv-preset" data-ar="9:16"  type="button">9:16</button>
+          <button class="sv-preset" data-ar="4:3"   type="button">4:3</button>
+          <button class="sv-preset" data-ar="3:4"   type="button">3:4</button>
+          <button class="sv-preset" data-ar="1:1"   type="button">1:1</button>
+          <button class="sv-preset" data-ar="21:9"  type="button">21:9</button>
+          <button class="sv-preset" data-ar="2:1"   type="button">2:1</button>
+          <button class="sv-preset" data-ar="3:2"   type="button">3:2</button>
+          <button class="sv-preset" data-ar="free"  type="button">Free</button>
+          <button class="sv-preset" data-ar="reset" type="button">Reset</button>
+        </div>
+
+        <div class="sv-row-label">Encoding</div>
+        <select class="sv-select" id="svCodec"></select>
+
+        <div class="sv-row-label">
+          <span>Bitrate</span>
+          <span class="sv-bitrate-readout" id="svBitrateReadout">16 Mbps</span>
+        </div>
+        <div class="sv-bitrate-row">
+          <input class="sv-bitrate-slider" id="svBitrate" type="range" min="1" max="200" step="1" value="16" />
+          <label class="sv-max-toggle">
+            <input type="checkbox" id="svBitrateMax" />
+            <span>MAX</span>
+          </label>
+        </div>
+        <div class="sv-presets sv-bitrate-presets">
+          <button class="sv-preset" data-br="4"   type="button">4M</button>
+          <button class="sv-preset" data-br="8"   type="button">8M</button>
+          <button class="sv-preset active" data-br="16"  type="button">16M</button>
+          <button class="sv-preset" data-br="25"  type="button">25M</button>
+          <button class="sv-preset" data-br="50"  type="button">50M</button>
+          <button class="sv-preset" data-br="100" type="button">100M</button>
+        </div>
+
+        <div class="sv-row-label">Frame Rate</div>
+        <div class="sv-presets sv-fps-presets" id="svFpsPresets">
+          <button class="sv-preset" data-fps="24" type="button">24</button>
+          <button class="sv-preset" data-fps="30" type="button">30</button>
+          <button class="sv-preset active" data-fps="60" type="button">60</button>
+          <button class="sv-preset" data-fps="120" type="button">120</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="io-actions">
+    <button class="io-btn" id="svCancelBtn" type="button">Cancel</button>
+    <button class="io-btn primary" id="svStartBtn" type="button">Start Recording</button>
+  </div>
+</div>
+
 <!-- ---- fade-to-black transition layer ---- -->
 <div class="fade-layer" id="fadeLayer"></div>
 
