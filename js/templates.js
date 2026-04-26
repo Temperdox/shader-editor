@@ -1542,64 +1542,83 @@ function tplPixelSort(){
   const seedHu = n('add',         -700, -180, {}, { b: 41.0 });
   const seedPh = n('add',         -700,  -60, {}, { b: 71.0 });
 
-  // per-slot speed & hue
+  // per-slot speed & hue & phase (stable)
   const speed  = n('random',      -440, -300, { mode:'decimal', precision: 4 }, { min: 0.6, max: 2.0 });
   const hueSd  = n('random',      -440, -180, { mode:'decimal', precision: 4 }, { min: 0.0, max: 1.0 });
   const phaseO = n('random',      -440,  -60, { mode:'decimal', precision: 4 }, { min: 0.0, max: 1.0 });
 
-  // ---------- timing & cycle (repositioning trigger) ----------
-  const tSpd   = n('multiply',    -180,  220);
-  const phaseR = n('add',           60,  220);
-  const cycle  = n('floor',        320,  340);
-  const phase  = n('fract',        320,  220);
+  // ---------- timing & dual cycles ----------
+  const tSpd    = n('multiply',    -180,  220);
+  const phaseR  = n('add',           60,  220);
+  const cycle   = n('floor',        320,  340);
+  const cycleP  = n('subtract',     320,  460, {}, { b: 1.0 });
+  const phase   = n('fract',        320,  220);
 
-  // Seed for repositioning jitter
-  const cycScl = n('multiply',     580,  340, {}, { b: 113.0 });
-  const sjMix  = n('add',          840,  340);
-  const jitter = n('random',      1100,  340, { mode:'decimal', precision: 4 }, { min: 0.05, max: 0.95 });
+  // ---------- dual jitters (current and previous) ----------
+  const cycScl  = n('multiply',     580,  340, {}, { b: 113.0 });
+  const sjMix   = n('add',          840,  340);
+  const jitter  = n('random',      1100,  340, { mode:'decimal', precision: 4 }, { min: 0.05, max: 0.95 });
 
-  // ---------- bar x center ----------
-  const sumSJ  = n('add',         1360,  340);
-  const center = n('divide',      1620,  340, {}, { b: slots });
+  const cycSclP = n('multiply',     580,  460, {}, { b: 113.0 });
+  const sjMixP  = n('add',          840,  460);
+  const jitterP = n('random',      1100,  460, { mode:'decimal', precision: 4 }, { min: 0.05, max: 0.95 });
 
-  // ---------- xMask: slightly wider for better visibility ----------
-  const dx     = n('subtract',    1880,  340);
-  const distX  = n('abs',         2140,  340);
-  const xRamp  = n('smoothstep',  2400,  340, {}, { a: 0.0003, b: 0.0006 });
-  const xMask  = n('subtract',    2660,  340, {}, { a: 1.0 });
+  // ---------- dual xMasks ----------
+  const mkXMask = (x, y, j) => {
+    const s = n('add', x, y);
+    const d = n('divide', x + 240, y, {}, { b: slots });
+    const dx = n('subtract', x + 480, y);
+    const ax = n('abs', x + 720, y);
+    const rm = n('smoothstep', x + 960, y, {}, { a: 0.0003, b: 0.0007 });
+    const mk = n('subtract', x + 1220, y, {}, { a: 1.0 });
+    c(slot, 'out', s, 'a');
+    c(j, 'out', s, 'b');
+    c(s, 'out', d, 'a');
+    c(split, 'x', dx, 'a');
+    c(d, 'out', dx, 'b');
+    c(dx, 'out', ax, 'x');
+    c(ax, 'out', rm, 'x');
+    c(rm, 'out', mk, 'b');
+    return mk;
+  };
 
-  // ---------- y mask: drip phase (0-0.7) + static hold phase (0.7-1.0) ----------
-  const dripPr = n('smoothstep',   580,  460, {}, { a: 0.0, b: 0.7 });
-  const head   = n('subtract',     840,  460, {}, { a: 1.0 });
-  const diff   = n('subtract',    1100,  460);
-  const yDrip  = n('smoothstep',  1360,  460, {}, { a: 0.0, b: 0.002 });
-  const yHold  = n('smoothstep',   580,  580, {}, { a: 0.7, b: 0.71 });
-  const finalY = n('max',         1620,  520);
+  const xMask  = mkXMask(1360, 340, jitter);
+  const xMaskP = mkXMask(1360, 460, jitterP);
 
-  // ---------- textured color ----------
-  const tTex   = n('time',       -700,  140, { scale: 0.5 });
-  const texFbm = n('fbm',        -440,  140, { octaves: 4 });
-  const texScl = n('multiply',   -180,  140, {}, { b: 0.2 });
-  const texHue = n('add',          60, -180);
-  const pal    = n('palette',      320, -240);
+  // ---------- y mask: dripping downward (head goes 1 -> 0) ----------
+  const head   = n('subtract',     580,  220, {}, { a: 1.0 });
+  const diff   = n('subtract',     840,  220);
+  const yDrip  = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.002 });
+  const yInv   = n('subtract',    1360,  220, {}, { a: 1.0 });
 
-  // ---------- composite ----------
-  const bright = n('multiply',    1880,  160);
-  const litCol = n('mix',         2140,   80);
-  const sat    = n('saturation',  2400,   80, {}, { scale: 1.8 });
+  // ---------- dual-line composite: New line 'overwrites' Old line ----------
+  const lineN  = n('multiply',    2700,  340);
+  const lineO  = n('multiply',    2700,  460);
+  const totalB = n('max',         2960,  400);
 
-  const out    = n('output',      2660,   80, {
+  // ---------- vertical texture: stretched FBM ----------
+  const uvTex  = n('makeVec2',    -180,   40);
+  const tTex   = n('time',        -180,  120, { scale: 0.4 });
+  const texFbm = n('fbm',          60,   40, { octaves: 4 });
+  const texScl = n('multiply',    320,   40, {}, { b: 0.25 });
+  const texHue = n('add',         560,  -80);
+  const pal    = n('palette',     820, -120);
+
+  // ---------- final color & bloom ----------
+  const litCol = n('mix',         3220,  400);
+  const sat    = n('saturation',  3480,  400, {}, { scale: 1.8 });
+
+  const out    = n('output',      3740,  400, {
     bloom:          'on',
-    bloomThreshold: 0.15,
-    bloomRadius:    3.0,
-    bloomIntensity: 1.6,
+    bloomThreshold: 0.12,
+    bloomRadius:    3.5,
+    bloomIntensity: 1.8,
   });
 
   // ---------- wiring ----------
   c(uv,    'out', split, 'v');
-  c(split, 'x',   xMul,  'a');
-  c(xMul,  'out', slot,  'x');
 
+  // stable hashes
   c(slot,  'out', seedSp, 'a');
   c(slot,  'out', seedHu, 'a');
   c(slot,  'out', seedPh, 'a');
@@ -1607,49 +1626,56 @@ function tplPixelSort(){
   c(seedHu,'out', hueSd,  'seed');
   c(seedPh,'out', phaseO, 'seed');
 
+  // timing & dual cycles
   c(tDrip,  'out', tSpd,   'a');
   c(speed,  'out', tSpd,   'b');
   c(tSpd,   'out', phaseR, 'a');
   c(phaseO, 'out', phaseR, 'b');
   c(phaseR, 'out', cycle,  'x');
+  c(cycle,  'out', cycleP, 'a');
   c(phaseR, 'out', phase,  'x');
 
+  // current jitter
   c(cycle,  'out', cycScl, 'a');
   c(slot,   'out', sjMix,  'a');
   c(cycScl, 'out', sjMix,  'b');
   c(sjMix,  'out', jitter, 'seed');
 
-  c(slot,   'out', sumSJ,  'a');
-  c(jitter, 'out', sumSJ,  'b');
-  c(sumSJ,  'out', center, 'a');
+  // previous jitter
+  c(cycleP, 'out', cycSclP, 'a');
+  c(slot,   'out', sjMixP,  'a');
+  c(cycSclP,'out', sjMixP,  'b');
+  c(sjMixP, 'out', jitterP, 'seed');
 
-  c(split,  'x',   dx,     'a');
-  c(center, 'out', dx,     'b');
-  c(dx,     'out', distX,  'x');
-  c(distX,  'out', xRamp,  'x');
-  c(xRamp,  'out', xMask,  'b');
+  // growth head
+  c(phase, 'out', head, 'b');
+  c(split, 'y',   diff, 'a');
+  c(head,  'out', diff, 'b');
+  c(diff,  'out', yDrip, 'x');
+  c(yDrip, 'out', yInv, 'b');
 
-  c(phase,  'out', dripPr, 'x');
-  c(dripPr, 'out', head,   'b');
-  c(split,  'y',   diff,   'a');
-  c(head,   'out', diff,   'b');
-  c(diff,   'out', yDrip,  'x');
-  c(phase,  'out', yHold,  'x');
-  c(yDrip,  'out', finalY, 'a');
-  c(yHold,  'out', finalY, 'b');
+  // composite dual lines: lineN grows, lineO fades out from top
+  c(xMask,  'out', lineN, 'a');
+  c(yDrip,  'out', lineN, 'b');
+  c(xMaskP, 'out', lineO, 'a');
+  c(yInv,   'out', lineO, 'b');
+  c(lineN,  'out', totalB, 'a');
+  c(lineO,  'out', totalB, 'b');
 
-  c(uv,      'out', texFbm, 'p');
-  c(tTex,    'out', texFbm, 'z');
-  c(texFbm,  'out', texScl, 'a');
-  c(hueSd,   'out', texHue, 'a');
-  c(texScl,  'out', texHue, 'b');
-  c(texHue,  'out', pal,    't');
-
-  c(xMask,  'out', bright, 'a');
-  c(finalY, 'out', bright, 'b');
+  // textured color: stretched UV.x for vertical streaks
+  const uvXScl = n('multiply', -440, 40, {}, { b: 0.1 });
+  c(split, 'x', uvXScl, 'a');
+  c(uvXScl, 'out', uvTex, 'x');
+  c(split, 'y', uvTex, 'y');
+  c(uvTex,  'out', texFbm, 'p');
+  c(tTex,   'out', texFbm, 'z');
+  c(texFbm, 'out', texScl, 'a');
+  c(hueSd,  'out', texHue, 'a');
+  c(texScl, 'out', texHue, 'b');
+  c(texHue, 'out', pal,    't');
 
   c(pal,    'out', litCol, 'b');
-  c(bright, 'out', litCol, 't');
+  c(totalB, 'out', litCol, 't');
 
   c(litCol, 'out', sat, 'rgb');
   c(sat,    'out', out, 'color');
