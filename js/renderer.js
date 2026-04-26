@@ -21,6 +21,17 @@ const renderer = (() => {
   // compile will then error with a clearer message.
   gl.getExtension('OES_standard_derivatives');
 
+  // Pre-bake the noise texture used by the textured snoise() helper.
+  // ~256KB upload, ~50ms one-shot CPU cost. Bound to a fixed unit each
+  // frame; uniform location resolved per recompile.
+  // Slot 15 = the noise sampler. Per-node image textures use slots 0..N
+  // (textureBindings); 15 is high enough to never collide.
+  const NOISE_UNIT = 15;
+  const noiseBake = (typeof buildNoiseTexture === 'function')
+    ? buildNoiseTexture(gl, 512, 8)
+    : null;
+  let uNoise = null;
+
   // Vertex shader: pass-through XY for the fullscreen mesh, plus a built-in
   // noise-based normal field exposed via `v_surfaceNormal`. The fragment
   // shader can read this through the `World Normal` node for shaders that
@@ -180,6 +191,11 @@ const renderer = (() => {
       uRes      = gl.getUniformLocation(program, 'u_resolution');
       uSimLight = gl.getUniformLocation(program, 'u_simLight');
       uShadows  = gl.getUniformLocation(program, 'u_shadows');
+      // Noise sampler — only present when the compiled shader actually
+      // references the textured snoise helper. getUniformLocation returns
+      // null otherwise; bind code below short-circuits on null.
+      uNoise    = gl.getUniformLocation(program, 'u_noise');
+      if (uNoise != null) gl.uniform1i(uNoise, NOISE_UNIT);
 
       // Resolve each sampler2D uniform location and lock it to a texture slot.
       // uniform1i only needs to be set once per program — the frame loop just
@@ -270,6 +286,13 @@ const renderer = (() => {
           // returns 1.0 (no shadow). Preview always sets this to 1.0.
           const shadowsOn = document.body.classList.contains('shadows-on');
           if (uShadows) gl.uniform1f(uShadows, shadowsOn ? 1.0 : 0.0);
+          // Bind the pre-baked noise atlas to its reserved unit. Cheap;
+          // skip if the bake isn't available or the shader doesn't sample
+          // it (uNoise == null when the program doesn't reference it).
+          if (uNoise != null && noiseBake){
+            gl.activeTexture(gl.TEXTURE0 + NOISE_UNIT);
+            gl.bindTexture(gl.TEXTURE_2D, noiseBake.texture);
+          }
           for (const b of textureBindings){
             gl.activeTexture(gl.TEXTURE0 + b.slot);
             gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));

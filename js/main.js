@@ -2,6 +2,17 @@
    kick off the first shader compile. All other files declare globals on the
    window so this file can just use them. */
 
+// Debug-only: swap textured snoise → analytic snoise for visual regression
+// comparison. Call from devtools console: `toggleAnalyticNoise()` toggles,
+// `toggleAnalyticNoise(true)` forces analytic, `toggleAnalyticNoise(false)`
+// forces textured. Logs the resulting state and triggers a recompile.
+window.toggleAnalyticNoise = function(force){
+  state.useAnalyticNoise = (typeof force === 'boolean') ? force : !state.useAnalyticNoise;
+  console.log('[noise] mode:', state.useAnalyticNoise ? 'analytic (slow)' : 'textured (fast)');
+  if (typeof recompileShader === 'function') recompileShader();
+  return state.useAnalyticNoise;
+};
+
 // header buttons
 $('#addNodeBtn').addEventListener('click', () => openPicker());
 $('#resetGraphBtn').addEventListener('click', resetGraph);

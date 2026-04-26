@@ -12,6 +12,11 @@ const state = {
   selected: new Set(), // Set<nodeId> — empty = nothing selected
   snapToGrid: false,   // when true, drag snaps node top-left to GRID_SNAP_PX
   toolMode: 'select',  // 'select' | 'pan' | 'zoom' — set by the left toolbar
+  // Debug: when true, the compiler emits the OLD analytic snoise() helper
+  // (full 3D simplex math, ~30 ALU ops/call) instead of the new texture
+  // lookup. Toggle from devtools via `toggleAnalyticNoise()`. Default false
+  // = textured snoise (10× cheaper). For visual regression testing only.
+  useAnalyticNoise: false,
 };
 // Drag snap step. Matches the small (22px) gridlines drawn by .graph-grid
 // so snapped nodes visually land on grid intersections.

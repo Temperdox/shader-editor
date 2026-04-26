@@ -2,7 +2,33 @@
    The compiler only emits helpers that are actually referenced by the reachable
    node set, so unused blocks never ship to the GPU. */
 const SHADER_HELPERS = {
+  // FAST snoise — samples a pre-baked 512x512 noise texture (built JS-side
+  // by noise-bake.js) instead of running ~30 ALU ops per call. Two texture
+  // lookups + a smooth lerp simulate the z dimension by sampling the same
+  // 2D field at z-derived offsets and mixing. Tile period is 8 input units
+  // (matches noise-bake.js's tileSize). The compiler injects
+  // `uniform sampler2D u_noise;` into the prelude when this helper is
+  // emitted; the renderer binds the noise texture to a fixed slot.
+  // For visual debugging, set state.useAnalyticNoise=true to swap in the
+  // snoiseAnalytic helper below (full analytic 3D simplex). */
   snoise: `
+float snoise(vec3 v){
+  // Two 2D samples at z-offset positions, lerped, simulate the z axis.
+  // Aperiodic offsets so adjacent z slices don't visually tile together.
+  float zi = floor(v.z);
+  float zf = v.z - zi;
+  float zt = zf * zf * (3.0 - 2.0 * zf);
+  vec2 off0 = vec2(zi * 5.123, zi * 3.737);
+  vec2 off1 = vec2((zi + 1.0) * 5.123, (zi + 1.0) * 3.737);
+  vec2 inv = vec2(1.0 / 8.0);  // 1 / tileSize
+  float n0 = texture2D(u_noise, (v.xy + off0) * inv).r * 2.0 - 1.0;
+  float n1 = texture2D(u_noise, (v.xy + off1) * inv).r * 2.0 - 1.0;
+  return mix(n0, n1, zt);
+}`,
+  // ANALYTIC snoise — full Quilez-style 3D simplex math. Used when
+  // state.useAnalyticNoise is set; emitted by the compiler INSTEAD of the
+  // textured snoise above. Visual ground truth for regression testing.
+  snoiseAnalytic: `
 vec3 _mod289_3(vec3 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
 vec4 _mod289_4(vec4 x){ return x - floor(x * (1.0/289.0)) * 289.0; }
 vec4 _permute(vec4 x){ return _mod289_4(((x*34.0)+1.0)*x); }

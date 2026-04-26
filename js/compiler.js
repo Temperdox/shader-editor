@@ -218,13 +218,24 @@ function compileGraph(){
     sdfNormal3D: 0,
     heightToNormal: 0,
   };
+  // When state.useAnalyticNoise is set (debug toggle), swap the textured
+  // snoise helper for the original analytic 3D simplex. The function name
+  // stays `snoise` either way so all callsites are unchanged.
+  const useAnalytic = state.useAnalyticNoise === true;
   const preludeHelpers = [...helpers]
     .sort((a, b) => (HELPER_RANK[a] ?? 9) - (HELPER_RANK[b] ?? 9))
-    .map(k => SHADER_HELPERS[k])
+    .map(k => (k === 'snoise' && useAnalytic) ? SHADER_HELPERS['snoiseAnalytic'] : SHADER_HELPERS[k])
     .join('\n');
 
-  const samplerDecls = textureBindings
-    .map(b => `uniform sampler2D ${b.uniformName};`)
+  // The textured snoise helper reads from `u_noise` (a sampler2D bound to
+  // a fixed slot by the renderer); inject the declaration whenever that
+  // helper is reachable. Analytic mode skips this — no sampler needed.
+  const noiseSamplerDecl = (helpers.has('snoise') && !useAnalytic)
+    ? 'uniform sampler2D u_noise;'
+    : '';
+
+  const samplerDecls = [noiseSamplerDecl, ...textureBindings.map(b => `uniform sampler2D ${b.uniformName};`)]
+    .filter(Boolean)
     .join('\n');
 
   // #extension directives MUST come before anything else (GLSL ES 1.00 spec).
