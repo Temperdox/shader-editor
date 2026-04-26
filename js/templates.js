@@ -490,10 +490,12 @@ function tplBrickWallSpec(){
     imageUrl:    SPEC_URL,
     invert:      'no',          // bright = high (brick face), dark = low (mortar)
     heightScale: 0.04,
-    maxDist:     0.10,           // a touch longer to give the fade some room
-    sharpness:   8,              // softer penumbra
-    blurRadius:  0.005,          // ~5 texels of cross-pattern blur per height sample
-    fadeStart:   0.35,           // start fading the shadow tail at 35% of the march
+    maxDist:     0.10,
+    sharpness:   8,
+    blurRadius:  0.005,
+    fadeStart:   0.35,
+    samples:     '4',            // 4 spatial samples merged → cohesive shadow regions
+    mergeRadius: 0.004,          // how far the 3 offset samples sit from centre (UV)
     darkness:    0.45,
   });
   const shadGray    = n('grayscale',  -340, -300);

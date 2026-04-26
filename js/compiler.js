@@ -44,6 +44,7 @@ function compileGraph(){
   const helpers = new Set();
   const extensions = new Set();  // GLSL #extension directives needed (e.g. GL_OES_standard_derivatives)
   const textureBindings = [];    // [{ nodeId, uniformName }] — sampler2D needed by the compiled program
+  const inlineFunctions = [];    // per-node GLSL function definitions emitted to file scope (after helpers)
   const body = [];
   let tmpCounter = 0;
 
@@ -123,6 +124,15 @@ function compileGraph(){
       }
     }
 
+    // Per-node helper functions. Unlike `helpers` (global, named utilities
+    // like snoise/fbm), these are bespoke functions defined for THIS node
+    // instance — typically with a name suffixed by node.id to stay unique
+    // across multiple instances. Emitted to file scope, after the global
+    // helpers and before main(), so the node's setup can call them.
+    if (Array.isArray(result.inlineFunctions)){
+      for (const fn of result.inlineFunctions) inlineFunctions.push(fn);
+    }
+
     if (result.setup) body.push(result.setup);
 
     // Materialize each output to a named temp so downstream references are
@@ -200,6 +210,8 @@ ${samplerDecls}
 varying vec2  v_uv;
 
 ${preludeHelpers}
+
+${inlineFunctions.join('\n')}
 
 void main(){
 ${body.map(line => '  ' + line).join('\n')}

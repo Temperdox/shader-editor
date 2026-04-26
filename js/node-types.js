@@ -1666,6 +1666,14 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
       // of maxDist at which the fade begins. Lower = longer soft tail
       // (shadows fade earlier); 1.0 = hard cutoff at maxDist (old behaviour).
       {name:'fadeStart',   kind:'number',    default:0.5,   min:0,    max:1,    step:0.05},
+      // Spatial multi-sampling. 1 = single ray (fast). 4 = center + 3
+      // offsets in a triangle pattern around it, averaged together. 9 =
+      // 3×3 grid. Higher values blend each pixel's shadow with its
+      // neighbours' shadows so cohesive regions emerge — at 4–9× the
+      // per-pixel cost. Use `mergeRadius` to control how far the offset
+      // samples sit from the centre (UV units).
+      {name:'samples',     kind:'segmented', default:'1', options:['1', '4', '9']},
+      {name:'mergeRadius', kind:'number',    default:0.003, min:0,    max:0.02, step:0.0005},
       {name:'darkness',    kind:'number',    default:0.45,  min:0,    max:1,    step:0.05},
     ],
     // SOFT shadow ray-march via IQ's classic accumulator + per-sample BLUR.
@@ -1682,67 +1690,91 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
     // height = 125 samples per pixel. Still well within budget for typical
     // fullscreen shaders.
     generate:(ctx) => {
-      const uName = glslUniformName(ctx.node.id, 'sh');
+      const uName  = glslUniformName(ctx.node.id, 'sh');
       const result = ctx.tmp('shtR');
-      const occ    = ctx.tmp('shtO');
-      const startH = ctx.tmp('shtH0');
-      const lxy    = ctx.tmp('shtL');
-      const tt     = ctx.tmp('shtT');
-      const xy     = ctx.tmp('shtXy');
-      const rh     = ctx.tmp('shtRh');
-      const gh     = ctx.tmp('shtGh');
-      const dh     = ctx.tmp('shtDh');
-      const stepOcc = ctx.tmp('shtSO');
-      const distFade = ctx.tmp('shtDF');
-      const px     = ctx.tmp('shtPx');
+      const fnName = `_shtMarch_${ctx.node.id}`;     // per-instance march function
+
       const hs = glslNum(ctx.params.heightScale);
       const md = glslNum(ctx.params.maxDist);
       const dk = glslNum(ctx.params.darkness);
       const sk = glslNum(ctx.params.sharpness);
       const br = glslNum(ctx.params.blurRadius);
       const fs = glslNum(ctx.params.fadeStart);
+      const mr = glslNum(ctx.params.mergeRadius);
       const invPrefix = ctx.params.invert === 'yes' ? '(1.0 - (' : '((';
       const invSuffix = ctx.params.invert === 'yes' ? ') * 0.2)' : ' * 0.2)';
-      const blurredSample = (uvExpr) =>
+
+      // 5-tap cross-pattern blurred height sample, baked inline.
+      const sampleH = (uvExpr) =>
         `${invPrefix}` +
         `texture2D(${uName}, fract(${uvExpr})).r + ` +
-        `texture2D(${uName}, fract(${uvExpr} + vec2(-${px}.x, 0.0))).r + ` +
-        `texture2D(${uName}, fract(${uvExpr} + vec2( ${px}.x, 0.0))).r + ` +
-        `texture2D(${uName}, fract(${uvExpr} + vec2(0.0, -${px}.y))).r + ` +
-        `texture2D(${uName}, fract(${uvExpr} + vec2(0.0,  ${px}.y))).r` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2(-_px.x, 0.0))).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2( _px.x, 0.0))).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2(0.0, -_px.y))).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2(0.0,  _px.y))).r` +
         `${invSuffix}`;
-      return {
-        setup:
-`float ${result} = 1.0;
-if (u_shadows > 0.5) {
-  vec2 ${px} = vec2(${br});
-  float ${startH} = (${blurredSample(ctx.inputs.pos)}) * ${hs};
-  float ${lxy} = length(${ctx.inputs.lightDir}.xy);
-  if (${lxy} > 0.001) {
-    float ${occ} = 1.0;
-    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh}; float ${dh};
-    float ${stepOcc}; float ${distFade};
-    for (int _shti = 1; _shti <= 24; _shti++) {
-      ${tt} = (float(_shti) / 24.0) * ${md};
-      ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
-      ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
-      ${gh} = (${blurredSample(xy)}) * ${hs};
-      ${dh} = ${rh} - ${gh};
-      // Hard hit: still attenuate by distance fade so the trailing edge of
-      // a fully-occluded ray fades smoothly rather than terminating in a
-      // hard pixelated step.
-      ${distFade} = smoothstep(${md} * ${fs}, ${md}, ${tt});
-      if (${dh} < 0.0) { ${occ} = min(${occ}, ${distFade}); break; }
-      ${stepOcc} = ${sk} * ${dh} / ${tt};
-      // Lerp this step's occlusion contribution toward "fully lit" (1.0)
-      // as `t` approaches maxDist, producing a smooth shadow tail.
-      ${occ} = min(${occ}, mix(${stepOcc}, 1.0, ${distFade}));
-    }
-    ${result} = mix(${dk}, 1.0, clamp(${occ}, 0.0, 1.0));
+
+      // Per-instance march function — emitted to file scope so we can call
+      // it multiple times without inlining the whole 24-step loop. Returns
+      // the lit factor in [darkness, 1].
+      const marchFn = `
+float ${fnName}(vec2 startPos, vec3 lightDir) {
+  if (u_shadows < 0.5) return 1.0;
+  vec2 _px = vec2(${br});
+  float startH = (${sampleH('startPos')}) * ${hs};
+  float lxy = length(lightDir.xy);
+  if (lxy < 0.001) return 1.0;
+  float occ = 1.0;
+  float t; vec2 xy; float rh; float gh; float dh; float stepOcc; float distFade;
+  for (int _i = 1; _i <= 24; _i++) {
+    t = (float(_i) / 24.0) * ${md};
+    xy = startPos + lightDir.xy * t;
+    rh = startH + lightDir.z / lxy * t;
+    gh = (${sampleH('xy')}) * ${hs};
+    dh = rh - gh;
+    distFade = smoothstep(${md} * ${fs}, ${md}, t);
+    if (dh < 0.0) { occ = min(occ, distFade); break; }
+    stepOcc = ${sk} * dh / t;
+    occ = min(occ, mix(stepOcc, 1.0, distFade));
   }
-}`,
+  return mix(${dk}, 1.0, clamp(occ, 0.0, 1.0));
+}`;
+
+      // Build the per-pixel call(s) — average across N samples for
+      // cohesive merged shadows.
+      const samples = ctx.params.samples || '1';
+      let callExpr;
+      if (samples === '4') {
+        // 4-sample triangle: centre + 3 around it.
+        // Offsets chosen as roughly equilateral triangle around centre
+        // with one centre tap, averaged.
+        const r = mr;
+        callExpr = `(
+  ${fnName}(${ctx.inputs.pos},                                  ${ctx.inputs.lightDir}) +
+  ${fnName}(${ctx.inputs.pos} + vec2(${r}, 0.0),                ${ctx.inputs.lightDir}) +
+  ${fnName}(${ctx.inputs.pos} + vec2(-${r}*0.5,  ${r}*0.866),   ${ctx.inputs.lightDir}) +
+  ${fnName}(${ctx.inputs.pos} + vec2(-${r}*0.5, -${r}*0.866),   ${ctx.inputs.lightDir})
+) * 0.25`;
+      } else if (samples === '9') {
+        // 3×3 grid average.
+        const r = mr;
+        const offs = [];
+        for (let dy = -1; dy <= 1; dy++){
+          for (let dx = -1; dx <= 1; dx++){
+            offs.push(`${fnName}(${ctx.inputs.pos} + vec2(${r}*${glslNum(dx)}, ${r}*${glslNum(dy)}), ${ctx.inputs.lightDir})`);
+          }
+        }
+        callExpr = `(\n  ${offs.join(' +\n  ')}\n) * (1.0/9.0)`;
+      } else {
+        // Single sample (default, fastest).
+        callExpr = `${fnName}(${ctx.inputs.pos}, ${ctx.inputs.lightDir})`;
+      }
+
+      return {
+        setup: `float ${result} = ${callExpr};`,
         exprs:{ out: result },
         textures:[{ uniformName: uName }],
+        inlineFunctions:[ marchFn ],
       };
     },
   },
