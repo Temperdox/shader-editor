@@ -1503,6 +1503,76 @@ function tplPixelFlow(){
   c(post,  'out', out,   'color');
 }
 
+/* ---- Pixel Sort — Glitch-art vertical streaks dripping downward ---- */
+/* Fakes the "pixel sorting" / databending look (vertical color streaks like
+ * matrix rain over a textured base). Real pixel sorting reads the previous
+ * frame; we can't do that in a pure fragment shader, so we cheat: the y axis
+ * of the sample UV is multiplied by 35× before sampling FBM, which compresses
+ * the noise into very tall thin features → vertical streaks. Subtracting Time
+ * from y makes the field flow downward. A second, low-frequency FBM sampled
+ * at the un-stretched UV drives a hue shift so different streaks land on
+ * different hues, and Posterize cuts the gradient into the digital bands you
+ * see in real pixel-sort output. */
+function tplPixelSort(){
+  _clearGraph();
+  const { n, c } = _tplHelpers();
+
+  const cuv    = n('centeredUV', -1140, -40);
+  const tDrip  = n('time',       -1140, 200, { scale: 1.0 });
+
+  // split the centered UV so we can stretch y independently of x
+  const split  = n('splitVec2',  -840,  -40);
+  // y * 35 — squashes circular noise blobs into tall streak shapes
+  const yMul   = n('multiply',   -560,   60, {}, { b: 35.0 });
+  // (y*35) - time → the pattern flows downward as time advances
+  const ySub   = n('subtract',   -300,   60);
+  // recombine x + animated y into a stretched UV
+  const stretchUV = n('combine',  -40,  -10);
+
+  // primary noise sampled at the stretched UV → vertical streak intensity
+  const streaks   = n('fbm',       240,  -60, { octaves: 6 });
+
+  // secondary noise at the original UV → low-freq color variance per region
+  const colorBase = n('fbm',       240,  200, { octaves: 4 });
+
+  // streak intensity → rainbow palette (default cosine palette covers full hue)
+  const pal    = n('palette',     560,  -60);
+
+  // hue-shift the rainbow per region so streaks settle into different colors
+  const hueAmt = n('multiply',    560,  200, {}, { b: 0.5 });
+  const hue    = n('hueShift',    860,    0);
+
+  // pump saturation up so the colors read as vivid streaks, not muddy mids
+  const sat    = n('saturation', 1100,    0, {}, { scale: 1.35 });
+
+  // posterize cuts the smooth palette into the digital bands characteristic
+  // of pixel-sort output. 22 levels = clearly stepped without going chunky.
+  const post   = n('posterize',  1340,    0, {}, { levels: 22 });
+
+  const out    = n('output',     1580,    0);
+
+  // wire up the UV stretch chain
+  c(cuv,   'p',  split, 'v');
+  c(split, 'y',  yMul,  'a');               // y * 35
+  c(yMul,  'out', ySub, 'a');
+  c(tDrip, 'out', ySub, 'b');               // (y*35) - time
+  c(split, 'x',  stretchUV, 'x');
+  c(ySub,  'out', stretchUV, 'y');
+
+  // sample both noise fields
+  c(stretchUV, 'xy', streaks,   'p');
+  c(cuv,       'p',  colorBase, 'p');
+
+  // streak → palette → hue-shifted by colorBase → saturate → posterize → out
+  c(streaks,   'out', pal,    't');
+  c(colorBase, 'out', hueAmt, 'a');
+  c(pal,       'out', hue,    'rgb');
+  c(hueAmt,    'out', hue,    'amount');
+  c(hue,       'out', sat,    'rgb');
+  c(sat,       'out', post,   'color');
+  c(post,      'out', out,    'color');
+}
+
 /* ---- Cosmic Star — Soft Glow + Starburst + HDR Boost ---- */
 /* A bright orange core with hexagonal spikes radiating outward, all
  * boosted into saturation via HDR tonemap. Showcases the bloom-cluster
@@ -2270,6 +2340,8 @@ const SHADER_TEMPLATES = [
     desc: 'Voronoi facets + per-cell normals → iridescence + Fresnel.',       load: tplCrystal },
   { id: 'pixelFlow',       name: 'Pixel Flow',       category:'showcase',
     desc: '48×48 pixelated grid over animated Ridged FBM, palette-tinted and posterized.', load: tplPixelFlow },
+  { id: 'pixelSort',       name: 'Pixel Sort',       category:'showcase',
+    desc: 'Glitch-art vertical color streaks dripping downward — fakes pixel sorting via Y-stretched FBM.', load: tplPixelSort },
   { id: 'plaid',           name: 'Plaid',            category:'showcase',
     desc: 'Crossed Stripes × two pastel colors — warm/cool tartan weave.',   load: tplPlaid },
   { id: 'vortex',          name: 'Vortex',           category:'showcase',
