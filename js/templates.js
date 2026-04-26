@@ -1533,9 +1533,9 @@ function tplPixelSort(){
   const split  = n('splitVec2',  -1440,    0);
 
   // ---------- slot index ----------
-  // 80 slots across screen → one bar per slot at any time. Each slot is
-  // 1/80 of width; the bar inside it can be at any x within that range.
-  const xMul   = n('multiply',   -1180, -180, {}, { b: 80.0 });
+  // Increased to 800 slots for higher density and more random look
+  const slots   = 800.0;
+  const xMul   = n('multiply',   -1180, -180, {}, { b: slots });
   const slot   = n('floor',       -940, -180);
 
   // distinct hash seeds per slot
@@ -1543,60 +1543,61 @@ function tplPixelSort(){
   const seedHu = n('add',         -700, -180, {}, { b: 41.0 });
   const seedJt = n('add',         -700,  -60, {}, { b: 71.0 });
 
-  // per-slot speed in [0.4, 1.6] units/sec — wide range so cycles stagger
+  // per-slot speed in [0.6, 2.0] units/sec — slightly faster for more "melting" energy
   const speed  = n('random',      -440, -300,
     { mode:'decimal', precision: 4 },
-    { min: 0.4, max: 1.6 });
+    { min: 0.6, max: 2.0 });
 
-  // per-slot hue seed → cosine palette
+  // per-slot hue seed
   const hueSd  = n('random',      -440, -180,
     { mode:'decimal', precision: 4 },
     { min: 0.0, max: 1.0 });
 
-  // per-slot x jitter in [0.1, 0.9] — places the bar randomly within its
-  // slot so there's no visible vertical grid
+  // per-slot x jitter
   const jitter = n('random',      -440,  -60,
     { mode:'decimal', precision: 4 },
-    { min: 0.1, max: 0.9 });
+    { min: 0.05, max: 0.95 });
 
-  // ---------- bar x center: (slot + jitter) / 80 ----------
+  // ---------- bar x center: (slot + jitter) / slots ----------
   const sumSJ  = n('add',         -180,  -60);
-  const center = n('divide',         60,  -60, {}, { b: 80.0 });
+  const center = n('divide',         60,  -60, {}, { b: slots });
 
-  // ---------- xMask: thin bar around centerX ----------
-  const dx     = n('subtract',     320,  -60);     // x - centerX
+  // ---------- xMask: very thin bar around centerX ----------
+  const dx     = n('subtract',     320,  -60);
   const distX  = n('abs',          580,  -60);
-  // smoothstep(0.0015, 0.0022, distX) → 0 inside bar, 1 outside.
-  // Inverted via subtract from 1 below. Bar half-width ≈ 4-5px on 3000-wide.
-  const xRamp  = n('smoothstep',   840,  -60, {}, { a: 0.0015, b: 0.0022 });
+  // Extremely thin lines for "glitch art" feel
+  const xRamp  = n('smoothstep',   840,  -60, {}, { a: 0.0001, b: 0.0003 });
   const xMask  = n('subtract',    1100,  -60, {}, { a: 1.0 });
 
   // ---------- y mask: lit from top down to head ----------
-  // tSpd = time * speed
   const tSpd   = n('multiply',    -180,  220);
-  // phaseRaw = tSpd + jitter (jitter doubles as per-slot phase offset)
   const phaseR = n('add',           60,  220);
   const phase  = n('fract',        320,  220);
-  // head_y = 1 - phase (top at start of cycle, bottom at end)
   const head   = n('subtract',     580,  220, {}, { a: 1.0 });
-  // diff = y - head_y (positive when above head, negative when below)
   const diff   = n('subtract',     840,  220);
-  // yMask = 1 if y >= head (line spans from top down to head)
-  const yMask  = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.005 });
+  const yMask  = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.002 });
 
-  // ---------- composite ----------
-  const bright = n('multiply',    1360,   80);     // xMask * yMask
+  // ---------- textured color: modulate hue with FBM noise ----------
+  const tTex   = n('time',       -700,  140, { scale: 0.5 });
+  const texFbm = n('fbm',        -440,  140, { octaves: 4 });
+  const texScl = n('multiply',   -180,  140, {}, { b: 0.2 });
+  const texHue = n('add',          60, -180);
 
   // hue → cosine palette
   const pal    = n('palette',      320, -240);
 
-  // mix(black, color, bright) = color * bright. Constant brightness inside.
+  // ---------- composite ----------
+  const bright = n('multiply',    1360,   80);
   const litCol = n('mix',         1620,    0);
+  const sat    = n('saturation',  1880,    0, {}, { scale: 1.8 });
 
-  // pump saturation so the bars stay vivid
-  const sat    = n('saturation',  1880,    0, {}, { scale: 1.4 });
-
-  const out    = n('output',      2120,    0);
+  // Output with bloom for that "vibrant" glow
+  const out    = n('output',      2120,    0, {
+    bloom:          'on',
+    bloomThreshold: 0.2,
+    bloomRadius:    2.5,
+    bloomIntensity: 1.5,
+  });
 
   // ---------- wiring ----------
   c(uv,    'out', split, 'v');
@@ -1613,36 +1614,42 @@ function tplPixelSort(){
   c(seedHu,'out', hueSd,  'seed');
   c(seedJt,'out', jitter, 'seed');
 
-  // bar x center = (slot + jitter) / 80
+  // bar x center
   c(slot,   'out', sumSJ,  'a');
   c(jitter, 'out', sumSJ,  'b');
   c(sumSJ,  'out', center, 'a');
 
-  // xMask: 1 inside thin bar, 0 outside
+  // xMask
   c(split,  'x',   dx,     'a');
   c(center, 'out', dx,     'b');
   c(dx,     'out', distX,  'x');
   c(distX,  'out', xRamp,  'x');
-  c(xRamp,  'out', xMask,  'b');     // 1 - smoothstep(...)
+  c(xRamp,  'out', xMask,  'b');
 
-  // yMask: line from top of screen down to descending head
+  // yMask
   c(tDrip,  'out', tSpd,   'a');
   c(speed,  'out', tSpd,   'b');
   c(tSpd,   'out', phaseR, 'a');
-  c(jitter, 'out', phaseR, 'b');     // phase offset varies per slot too
+  c(jitter, 'out', phaseR, 'b');
   c(phaseR, 'out', phase,  'x');
-  c(phase,  'out', head,   'b');     // head = 1 - phase
+  c(phase,  'out', head,   'b');
   c(split,  'y',   diff,   'a');
-  c(head,   'out', diff,   'b');     // diff = y - head
-  c(diff,   'out', yMask,  'x');     // 1 if diff > 0.005, 0 if diff < 0
+  c(head,   'out', diff,   'b');
+  c(diff,   'out', yMask,  'x');
 
-  // bright = xMask * yMask
+  // textured color wiring
+  c(uv,      'out', texFbm, 'p');
+  c(tTex,    'out', texFbm, 'z');
+  c(texFbm,  'out', texScl, 'a');
+  c(hueSd,   'out', texHue, 'a');
+  c(texScl,  'out', texHue, 'b');
+  c(texHue,  'out', pal,    't');
+
+  // composite
   c(xMask,  'out', bright, 'a');
   c(yMask,  'out', bright, 'b');
 
-  // color
-  c(hueSd,  'out', pal,    't');
-  c(pal,    'out', litCol, 'b');     // a = black default
+  c(pal,    'out', litCol, 'b');
   c(bright, 'out', litCol, 't');
 
   c(litCol, 'out', sat, 'rgb');
