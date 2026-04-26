@@ -1527,7 +1527,7 @@ function tplPixelSort(){
 
   // sources
   const uv     = n('uv',         -1700,    0);
-  const tDrip  = n('time',       -1700,  280, { scale: 1.0 });
+  const tDrip  = n('time',       -1700,  280, { scale: 0.25 });
 
   // split UV into x, y in [0, 1]
   const split  = n('splitVec2',  -1440,    0);
