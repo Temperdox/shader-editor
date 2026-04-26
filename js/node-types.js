@@ -1498,6 +1498,18 @@ float ${mask} = smoothstep(${ctx.inputs.cutoff}, ${ctx.inputs.cutoff} + ${ctx.in
       };
     },
   },
+  contrast: {
+    category:'Effect', title:'Contrast', desc:'adjust color contrast around a midpoint',
+    inputs:[
+      {name:'color',    type:'vec3',  default:[0.5, 0.5, 0.5]},
+      {name:'contrast', type:'float', default:1.2},
+      {name:'midpoint', type:'float', default:0.5},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    generate:(ctx) => ({ exprs:{
+      out: `((${ctx.inputs.color} - ${ctx.inputs.midpoint}) * ${ctx.inputs.contrast} + ${ctx.inputs.midpoint})`,
+    } }),
+  },
   softGlow: {
     category:'Effect', title:'Soft Glow', desc:'radial glow from a point — gaussian falloff',
     inputs:[

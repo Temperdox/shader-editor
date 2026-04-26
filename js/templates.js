@@ -1585,18 +1585,17 @@ function tplPixelSort(){
   const xMask  = mkXMask(1360, 340, jitter);
   const xMaskP = mkXMask(1360, 460, jitterP);
 
-  // ---------- y mask: dripping downward (head goes 1 -> 0) ----------
+  // ---------- y mask head (1 -> 0 dripping down) ----------
   const head   = n('subtract',     580,  220, {}, { a: 1.0 });
-  const diff   = n('subtract',     840,  220);
-  const yDrip  = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.002 });
-  const yInv   = n('subtract',    1360,  220, {}, { a: 1.0 });
+  const splitY = n('smoothstep',   840,  220, {}, { a: 0.0, b: 0.005 });
 
-  // ---------- dual-line composite: New line 'overwrites' Old line ----------
-  const lineN  = n('multiply',    2700,  340);
-  const lineO  = n('multiply',    2700,  460);
-  const totalB = n('max',         2960,  400);
+  // ---------- seamless swap composite ----------
+  // Above head = New line; Below head = Old line.
+  const bright = n('mix',         2700,  400);
+  const litCol = n('mix',         2960,  400);
 
   // ---------- vertical texture: stretched FBM ----------
+  const uvXScl = n('multiply',    -440,   40, {}, { b: 0.1 });
   const uvTex  = n('makeVec2',    -180,   40);
   const tTex   = n('time',        -180,  120, { scale: 0.4 });
   const texFbm = n('fbm',          60,   40, { octaves: 4 });
@@ -1604,13 +1603,13 @@ function tplPixelSort(){
   const texHue = n('add',         560,  -80);
   const pal    = n('palette',     820, -120);
 
-  // ---------- final color & bloom ----------
-  const litCol = n('mix',         3220,  400);
-  const sat    = n('saturation',  3480,  400, {}, { scale: 1.8 });
+  // ---------- final color, contrast, and bloom ----------
+  const sat    = n('saturation',  3220,  400, {}, { scale: 1.8 });
+  const finalC = n('contrast',    3480,  400, {}, { contrast: 1.3 });
 
   const out    = n('output',      3740,  400, {
     bloom:          'on',
-    bloomThreshold: 0.12,
+    bloomThreshold: 0.1,
     bloomRadius:    3.5,
     bloomIntensity: 1.8,
   });
@@ -1635,50 +1634,45 @@ function tplPixelSort(){
   c(cycle,  'out', cycleP, 'a');
   c(phaseR, 'out', phase,  'x');
 
-  // current jitter
+  // jitters
   c(cycle,  'out', cycScl, 'a');
   c(slot,   'out', sjMix,  'a');
   c(cycScl, 'out', sjMix,  'b');
   c(sjMix,  'out', jitter, 'seed');
 
-  // previous jitter
   c(cycleP, 'out', cycSclP, 'a');
   c(slot,   'out', sjMixP,  'a');
   c(cycSclP,'out', sjMixP,  'b');
   c(sjMixP, 'out', jitterP, 'seed');
 
-  // growth head
-  c(phase, 'out', head, 'b');
-  c(split, 'y',   diff, 'a');
-  c(head,  'out', diff, 'b');
-  c(diff,  'out', yDrip, 'x');
-  c(yDrip, 'out', yInv, 'b');
+  // split at head: phase 0 (top) to 1 (bottom)
+  c(phase,  'out', head,   'b');
+  c(split,  'y',   splitY, 'a');
+  c(head,   'out', splitY, 'b');
 
-  // composite dual lines: lineN grows, lineO fades out from top
-  c(xMask,  'out', lineN, 'a');
-  c(yDrip,  'out', lineN, 'b');
-  c(xMaskP, 'out', lineO, 'a');
-  c(yInv,   'out', lineO, 'b');
-  c(lineN,  'out', totalB, 'a');
-  c(lineO,  'out', totalB, 'b');
+  // mix: above head (splitY=1) -> xMask; below head (splitY=0) -> xMaskP
+  c(xMaskP, 'out', bright, 'a');
+  c(xMask,  'out', bright, 'b');
+  c(splitY, 'out', bright, 't');
 
-  // textured color: stretched UV.x for vertical streaks
-  const uvXScl = n('multiply', -440, 40, {}, { b: 0.1 });
-  c(split, 'x', uvXScl, 'a');
-  c(uvXScl, 'out', uvTex, 'x');
-  c(split, 'y', uvTex, 'y');
+  // vertical texture
+  c(split,  'x',   uvXScl, 'a');
+  c(uvXScl, 'out', uvTex,  'x');
+  c(split,  'y',   uvTex,  'y');
   c(uvTex,  'out', texFbm, 'p');
   c(tTex,   'out', texFbm, 'z');
   c(texFbm, 'out', texScl, 'a');
   c(hueSd,  'out', texHue, 'a');
-  c(texScl, 'out', texHue, 'b');
-  c(texHue, 'out', pal,    't');
+  c(texScl,  'out', texHue, 'b');
+  c(texHue,  'out', pal,    't');
 
+  // color composite
   c(pal,    'out', litCol, 'b');
-  c(totalB, 'out', litCol, 't');
+  c(bright, 'out', litCol, 't');
 
-  c(litCol, 'out', sat, 'rgb');
-  c(sat,    'out', out, 'color');
+  c(litCol, 'out', sat,    'rgb');
+  c(sat,    'out', finalC, 'color');
+  c(finalC, 'out', out,    'color');
 }
 
 /* ---- Cosmic Star — Soft Glow + Starburst + HDR Boost ---- */
