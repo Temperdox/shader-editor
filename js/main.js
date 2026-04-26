@@ -147,13 +147,23 @@ $('#shadowsBtn').addEventListener('click', () => {
     chunks = [];
 
     const stream = canvas.captureStream(60);
+    // Scale bitrate to canvas resolution. MediaRecorder defaults to ~2.5 Mbps
+    // which is far too low for high-detail shader output (looks blurry/blocky,
+    // especially on noise-heavy patterns). Aim for ~0.15 bits/pixel/frame at
+    // 60fps, capped at 50 Mbps so we don't blow up disk on huge canvases.
+    const px      = (canvas.width || 1920) * (canvas.height || 1080);
+    const bitrate = Math.min(50_000_000, Math.max(8_000_000, Math.round(px * 60 * 0.15)));
     try {
-      recorder = new MediaRecorder(stream, { mimeType: pickedMime });
+      recorder = new MediaRecorder(stream, {
+        mimeType: pickedMime,
+        videoBitsPerSecond: bitrate,
+      });
     } catch (err){
       console.error(err);
       toast('recorder init failed', 'err');
       return;
     }
+    console.log(`[saveVideo] ${canvas.width}x${canvas.height} @ 60fps, ${(bitrate/1_000_000).toFixed(1)} Mbps, ${pickedMime}`);
 
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) chunks.push(e.data);
