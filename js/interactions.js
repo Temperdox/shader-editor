@@ -103,9 +103,20 @@ function closeContextMenu(){
   ctxEl.classList.remove('open');
   ctxOpen = false;
 }
-window.addEventListener('mousedown', (e) => {
+// Close on any press outside the menu. Capture phase ensures we fire before
+// any node/socket/header pointerdown handler that calls stopPropagation. We
+// listen for both pointerdown (modern path, also covers touch) and mousedown
+// (so middle-click and edge cases still dismiss).
+function _closeMenuIfOutside(e){
   if (ctxOpen && !ctxEl.contains(e.target)) closeContextMenu();
-});
+}
+document.addEventListener('pointerdown', _closeMenuIfOutside, true);
+document.addEventListener('mousedown',   _closeMenuIfOutside, true);
+// Right-clicking elsewhere should also dismiss the current menu before the
+// new contextmenu handler opens a fresh one. mousedown/pointerdown above
+// usually catch this, but contextmenu in capture is a belt-and-braces guard
+// for browsers that don't fire pointerdown for the right button.
+document.addEventListener('contextmenu', _closeMenuIfOutside, true);
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape'){
     closeContextMenu();
