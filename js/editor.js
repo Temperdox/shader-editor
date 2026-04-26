@@ -124,7 +124,16 @@ function renderNode(node){
   for (const sock of inputs){
     const row = document.createElement('div');
     row.className = 'node-row';
+    // Two flavors of "connected":
+    //   `connected` — there is a wire physically rendered to this socket
+    //                 → the socket dot stays filled, wire stays visible.
+    //   `live`      — the wire actually delivers a value (i.e. the source
+    //                 isn't a muted Flag output). Drives whether the inline
+    //                 editor shows: when the source is muted, the compiler
+    //                 falls back to this socket's default, so the user
+    //                 needs to be able to edit that default in place.
     const connected = isSocketConnected(node.id, 'in', sock.name);
+    const live      = isInputLive(node.id, sock.name);
 
     const s = document.createElement('div');
     s.className = 'socket in';
@@ -133,6 +142,7 @@ function renderNode(node){
     s.dataset.dir      = 'in';
     s.dataset.sockType = sock.type;
     if (connected) s.classList.add('connected');
+    if (connected && !live) s.classList.add('muted');
     row.appendChild(s);
 
     const label = document.createElement('div');
@@ -140,11 +150,10 @@ function renderNode(node){
     label.textContent = `${sock.name} (${sock.type})`;
     row.appendChild(label);
 
-    // Unconnected float/vec3 inputs normally get an inline editor beside the
-    // label. Sockets can opt out with `noInline:true` when another UI already
-    // controls their value — e.g. the Color node's r/g/b inputs, whose
-    // static values come from the `rgb` color-picker param instead.
-    if (!connected && !sock.noInline){
+    // Inline editor when no LIVE connection (so muted Flag uplinks still
+    // expose the editor — the user can tune the fall-back value while the
+    // wire stays visible). Sockets can opt out with `noInline:true`.
+    if (!live && !sock.noInline){
       const inline = makeInlineSocketInput(node, sock);
       if (inline) row.appendChild(inline);
     }
@@ -567,6 +576,11 @@ function renderConnections(){
     if (!from || !to) continue;
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.dataset.id = conn.id;
+    // Visually dim wires whose source is a muted Flag output — gives the
+    // user immediate feedback that the connection isn't currently
+    // delivering a value (and that the downstream inline editor is live).
+    const srcNode = state.nodes.find(n => n.id === conn.from.nodeId);
+    if (isFlagOutputMuted(srcNode, conn.from.socket)) path.classList.add('muted');
     const a = socketLogicalCenter(from);
     const b = socketLogicalCenter(to);
     path.setAttribute('d', curvePath(a, b));

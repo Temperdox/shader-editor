@@ -226,3 +226,40 @@ function isSocketConnected(nodeId, dir, socket){
   }
   return false;
 }
+
+/* Mirror of compiler.js's isFlagOutputMuted — duplicated here so editor /
+ * graph-state code can reason about muted Flag outputs without depending on
+ * the compiler module. Returns true when the source is any Flag variant and
+ * its output is currently emitting "nothing" (output toggle off, or every
+ * feeding input toggle off, or no internal wires). */
+function isFlagOutputMuted(srcNode, socketName){
+  if (!srcNode) return false;
+  const t = srcNode.type;
+  if (t !== 'flag' && t !== 'flagFloat' && t !== 'flagVec2') return false;
+  const m = /^out(\d+)$/.exec(socketName);
+  if (!m) return false;
+  const j = parseInt(m[1], 10);
+  const p = srcNode.params || {};
+  const enabled      = Array.isArray(p.enabled)      ? p.enabled      : [];
+  const inputEnabled = Array.isArray(p.inputEnabled) ? p.inputEnabled : [];
+  const wires        = Array.isArray(p.wires)        ? p.wires        : [];
+  if (enabled[j] === false) return true;
+  const feeds = wires.filter(w => w.to === j);
+  if (feeds.length === 0) return true;
+  return !feeds.some(w => inputEnabled[w.from] !== false);
+}
+
+/* Same as isSocketConnected but a connection whose source is a muted Flag
+ * output counts as "not connected." Used by node bodies to decide whether
+ * to show the inline value editor — when the upstream Flag is muted, the
+ * downstream socket falls back to its default at compile time, so the user
+ * needs to be able to edit that default in place. The socket dot itself
+ * still uses isSocketConnected so the rendered wire stays visually present. */
+function isInputLive(nodeId, socketName){
+  for (const c of state.connections){
+    if (c.to.nodeId !== nodeId || c.to.socket !== socketName) continue;
+    const src = state.nodes.find(n => n.id === c.from.nodeId);
+    if (!isFlagOutputMuted(src, c.from.socket)) return true;
+  }
+  return false;
+}

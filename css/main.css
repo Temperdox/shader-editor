@@ -370,6 +370,20 @@ body::after{
   stroke-dasharray:6 5;
   pointer-events:none;
 }
+/* Wires whose source is a muted Flag output — dimmed and dashed so the
+   user can see the connection is currently dead (and the downstream
+   socket's inline editor is the live source of truth). */
+.connections path.muted{
+  stroke:rgba(255,255,255,.18);
+  stroke-dasharray:4 4;
+}
+.connections path.muted.hover{ stroke:rgba(255,138,138,.6) }
+/* Node input socket dot — dim the fill when the connection is muted to
+   match the dashed wire and make the dead-wire state unmistakable. */
+.socket.in.connected.muted{
+  background:rgba(185,165,255,.20) !important;
+  border-color:rgba(185,165,255,.35) !important;
+}
 
 /* ---- node ---- */
 .node{
