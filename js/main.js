@@ -123,6 +123,14 @@ $('#shadowsBtn').addEventListener('click', () => {
   const durBtns   = modal ? [...modal.querySelectorAll('[data-dur]')] : [];
   const durInput  = $('#svDuration');
   const durRead   = $('#svDurationReadout');
+  // Replace the native number-input arrows with the themed chevron buttons
+  // already defined in editor.js. Has to run after the input exists in DOM.
+  if (durInput && typeof wrapWithSpinner === 'function' && !durInput.closest('.val-num-wrap')){
+    const next = durInput.nextSibling;
+    const parent = durInput.parentNode;
+    const wrapped = wrapWithSpinner(durInput);
+    parent.insertBefore(wrapped, next);
+  }
 
   // ---- recording state ----
   let recorder        = null;

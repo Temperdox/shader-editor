@@ -885,6 +885,41 @@ svg.flag-wires path.flag-wire.preview{
   overflow-y:auto;
   overflow-x:hidden;
   scrollbar-width:thin;
+  scrollbar-color: rgba(185,165,255,.45) rgba(0,0,0,.25);
+}
+/* WebKit/Blink stylized scrollbar — applies to both picker bodies (Add Module,
+   Load Shader, Templates) and the Save Video modal body. Firefox uses the
+   scrollbar-width / scrollbar-color above. */
+.picker-body::-webkit-scrollbar,
+.sv-body::-webkit-scrollbar,
+.code-preview-body::-webkit-scrollbar{
+  width:10px;
+  height:10px;
+}
+.picker-body::-webkit-scrollbar-track,
+.sv-body::-webkit-scrollbar-track,
+.code-preview-body::-webkit-scrollbar-track{
+  background:rgba(0,0,0,.25);
+  border-radius:8px;
+  margin:4px 0;
+}
+.picker-body::-webkit-scrollbar-thumb,
+.sv-body::-webkit-scrollbar-thumb,
+.code-preview-body::-webkit-scrollbar-thumb{
+  background:linear-gradient(180deg, rgba(185,165,255,.55), rgba(185,165,255,.30));
+  border:1px solid rgba(0,0,0,.5);
+  border-radius:8px;
+  background-clip:padding-box;
+}
+.picker-body::-webkit-scrollbar-thumb:hover,
+.sv-body::-webkit-scrollbar-thumb:hover,
+.code-preview-body::-webkit-scrollbar-thumb:hover{
+  background:linear-gradient(180deg, rgba(205,185,255,.85), rgba(185,165,255,.55));
+}
+.picker-body::-webkit-scrollbar-corner,
+.sv-body::-webkit-scrollbar-corner,
+.code-preview-body::-webkit-scrollbar-corner{
+  background:transparent;
 }
 .picker-group{ margin-top:10px }
 .picker-group-title{
@@ -1382,7 +1417,7 @@ svg.flag-wires path.flag-wire.preview{
 .sv-max-toggle input:checked + span{ color:#ffd6a5 }
 
 .sv-duration-input{
-  width:100px;
+  width:110px;
   padding:8px 12px;
   font-family:'JetBrains Mono', ui-monospace, monospace;
   font-size:12px;
@@ -1393,6 +1428,18 @@ svg.flag-wires path.flag-wire.preview{
   outline:none;
 }
 .sv-duration-input:focus{ border-color:rgba(185,165,255,.55) }
+/* hide the browser's native spin buttons — replaced with the themed
+   .val-spin chevrons via wrapWithSpinner() in main.js. */
+.sv-duration-input::-webkit-outer-spin-button,
+.sv-duration-input::-webkit-inner-spin-button{
+  -webkit-appearance:none;
+  appearance:none;
+  margin:0;
+}
+.sv-duration-input{ -moz-appearance:textfield }
+/* reserve room on the right for the spin column when wrapped */
+.val-num-wrap > .sv-duration-input{ padding-right:22px }
+.val-num-wrap:has(> .sv-duration-input) .val-spin{ width:16px }
 .sv-duration-suffix{
   font-size:10.5px; letter-spacing:.18em; text-transform:uppercase;
   color:var(--ink-dim);
