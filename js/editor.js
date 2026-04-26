@@ -1151,6 +1151,9 @@ function renderFlagBody(node, nodeEl, bodyEl){
       while (arr.length < numIn) arr.push(true);
       arr[i] = cb.checked;
       node.params.inputEnabled = arr;
+      // Re-render all nodes so downstream consumers update their inline-editor
+      // visibility and wire styling to reflect the new muted/live state.
+      renderAll();
       scheduleRecompile();
       pushHistory();
     });
@@ -1193,6 +1196,9 @@ function renderFlagBody(node, nodeEl, bodyEl){
       while (arr.length < numOut) arr.push(true);
       arr[j] = cb.checked;
       node.params.enabled = arr;
+      // Re-render all nodes so downstream consumers update their inline-editor
+      // visibility and wire styling to reflect the new muted/live state.
+      renderAll();
       scheduleRecompile();
       pushHistory();
     });
