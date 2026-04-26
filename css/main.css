@@ -79,6 +79,53 @@ body::after{
   padding:0 200px;
 }
 
+/* ---- bottom hint row — keybind cheat sheet ----
+   Each .hint is "<kbd>KEY</kbd> Action". Hints wrap onto multiple lines on
+   narrow viewports. Italic Fraunces is overridden here for a more compact,
+   utilitarian look that suits keyboard-style chips. */
+.br.hints{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:center;
+  align-items:center;
+  gap:6px 14px;
+  font-family:'Albert Sans', sans-serif;
+  font-style:normal;
+  font-size:11px;
+  letter-spacing:.05em;
+  color:var(--ink-dim);
+}
+.br.hints .hint{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  white-space:nowrap;
+}
+/* Keyboard / button chip — 3D-ish key with a soft top highlight and
+   bottom shadow so it visibly reads as a "key cap". Width auto-sizes to
+   the label so single letters stay square-ish and longer labels (Middle
+   drag, Scroll, Right click) get pill-shaped. */
+.kbd{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:20px;
+  padding:2px 7px;
+  font-family:'JetBrains Mono', ui-monospace, monospace;
+  font-size:10px;
+  letter-spacing:.04em;
+  color:var(--ink);
+  background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02));
+  border:1px solid rgba(255,255,255,.22);
+  border-radius:5px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.18),
+    0 1.5px 0 rgba(0,0,0,.55),
+    0 2.5px 4px rgba(0,0,0,.45);
+  text-transform:none;
+  user-select:none;
+}
+
 /* ---- liquid-glass modal — 80% of screen ----
    Approximates Apple's liquid glass (liquidGL-style): heavy backdrop blur +
    saturation boost + layered inner highlight/shadow so the shader shows
