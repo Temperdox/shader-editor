@@ -2091,18 +2091,21 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
     // Normal param rows aren't drawn — see editor.js renderFlagBody.
     customBody: 'flag',
     params: [
-      { name:'numInputs',  kind:'hidden', default: 3 },
-      { name:'numOutputs', kind:'hidden', default: 3 },
-      { name:'enabled',    kind:'hidden', default: [true, true, true] },
-      { name:'wires',      kind:'hidden', default: [] },   // [{from:inputIdx, to:outputIdx}]
+      { name:'numInputs',    kind:'hidden', default: 3 },
+      { name:'numOutputs',   kind:'hidden', default: 3 },
+      { name:'enabled',      kind:'hidden', default: [true, true, true] },     // per-output passthrough
+      { name:'inputEnabled', kind:'hidden', default: [true, true, true] },     // per-input gate
+      { name:'wires',        kind:'hidden', default: [] },                       // [{from, to}]
     ],
     // For each module output j:
     //   - if enabled[j] is false → vec3(0)
-    //   - otherwise sum every input wired to j; if none, vec3(0)
+    //   - otherwise sum every input wired to j (skipping inputs whose
+    //     own inputEnabled[i] is false); if none remain, vec3(0)
     generate: (ctx) => {
-      const numOut  = (ctx.node.params.numOutputs) || 0;
-      const enabled = Array.isArray(ctx.node.params.enabled) ? ctx.node.params.enabled : [];
-      const wires   = Array.isArray(ctx.node.params.wires)   ? ctx.node.params.wires   : [];
+      const numOut       = (ctx.node.params.numOutputs) || 0;
+      const enabled      = Array.isArray(ctx.node.params.enabled)      ? ctx.node.params.enabled      : [];
+      const inputEnabled = Array.isArray(ctx.node.params.inputEnabled) ? ctx.node.params.inputEnabled : [];
+      const wires        = Array.isArray(ctx.node.params.wires)        ? ctx.node.params.wires        : [];
       const exprs = {};
       for (let j = 0; j < numOut; j++){
         if (enabled[j] === false){
@@ -2110,7 +2113,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
           continue;
         }
         const feeds = wires
-          .filter(w => w.to === j)
+          .filter(w => w.to === j && inputEnabled[w.from] !== false)
           .map(w => ctx.inputs[`in${w.from}`])
           .filter(Boolean);
         if (feeds.length === 0)      exprs[`out${j}`] = 'vec3(0.0)';

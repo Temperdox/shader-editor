@@ -1066,8 +1066,11 @@ function renderFlagBody(node, nodeEl, bodyEl){
   rightCol.className = 'flag-col flag-col-out';
   zone.appendChild(rightCol);
 
-  // Input rows: external socket on the left edge, then label, then internal
-  // socket (acts as an OUT for internal wiring — the input proxy emits).
+  // Input rows: external socket on the left edge, then label, then a
+  // per-input passthrough checkbox (silences the input lane), then the
+  // internal socket (acts as an OUT for internal wiring — the input proxy
+  // emits).
+  const inputEnabled = Array.isArray(node.params.inputEnabled) ? node.params.inputEnabled : [];
   for (let i = 0; i < numIn; i++){
     const row = document.createElement('div');
     row.className = 'flag-row flag-row-in';
@@ -1085,6 +1088,26 @@ function renderFlagBody(node, nodeEl, bodyEl){
     lbl.className = 'flag-label';
     lbl.textContent = `in${i}`;
     row.appendChild(lbl);
+
+    // Per-input passthrough toggle: when off, this input contributes
+    // vec3(0) to every output it's wired to (instead of its actual value).
+    const chk = document.createElement('label');
+    chk.className = 'flag-pt';
+    chk.title = 'Input enable';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = inputEnabled[i] !== false;
+    cb.addEventListener('pointerdown', e => e.stopPropagation());
+    cb.addEventListener('change', () => {
+      const arr = Array.isArray(node.params.inputEnabled) ? [...node.params.inputEnabled] : [];
+      while (arr.length < numIn) arr.push(true);
+      arr[i] = cb.checked;
+      node.params.inputEnabled = arr;
+      scheduleRecompile();
+      pushHistory();
+    });
+    chk.appendChild(cb);
+    row.appendChild(chk);
 
     const inner = document.createElement('div');
     inner.className = 'socket-internal internal-out';
@@ -1179,6 +1202,13 @@ function flagSetInputCount(node, target){
     state.connections = state.connections.filter(c => !(c.to.nodeId === node.id && dropped.has(c.to.socket)));
     node.params.wires = (node.params.wires || []).filter(w => w.from < target);
   }
+  // Resize the per-input enable array (extend with `true` defaults, trim
+  // when shrinking).
+  const ie = Array.isArray(node.params.inputEnabled) ? [...node.params.inputEnabled] : [];
+  while (ie.length < target) ie.push(true);
+  ie.length = target;
+  node.params.inputEnabled = ie;
+
   renderAll();
   scheduleRecompile();
   pushHistory();
