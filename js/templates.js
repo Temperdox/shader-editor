@@ -1542,6 +1542,15 @@ function tplPixelSort(){
   const seedHu = n('add',         -700, -180, {}, { b: 41.0 });
   const seedPh = n('add',         -700,  -60, {}, { b: 71.0 });
 
+  // 3D seed for the random hash. rngHash3 produces visible periodic patterns
+  // when only one of (x,y,z) varies and the other two are zero — which is
+  // what happens if you wire only `seed`. Building vec3(slot, slot*0.617,
+  // slot*1.293) and feeding it into seedVec3 gives the hash three
+  // independently-stretched linear sequences, killing the repeats.
+  const slotG  = n('multiply',    -700,  -440, {}, { b: 0.617 });
+  const slotB  = n('multiply',    -440,  -440, {}, { b: 1.293 });
+  const seed3  = n('makeVec3',    -180,  -440);
+
   // per-slot speed & hue & phase (stable)
   const speed  = n('random',      -440, -300, { mode:'decimal', precision: 4 }, { min: 0.6, max: 2.0 });
   const hueSd  = n('random',      -440, -180, { mode:'decimal', precision: 4 }, { min: 0.0, max: 1.0 });
@@ -1590,7 +1599,7 @@ function tplPixelSort(){
   // Snap the head to 60 discrete y-tiers so the line descends in glitchy
   // VHS-scanline jumps instead of sliding smoothly. The seamless swap below
   // still works because splitY just reads whatever head value is current.
-  const headQ  = n('posterizeFloat', 840, 220, {}, { levels: 60 });
+  const headQ  = n('posterizeFloat', 840, 220, {}, { levels: 240 });
   const splitY = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.005 });
 
   // ---------- seamless swap composite ----------
@@ -1629,6 +1638,16 @@ function tplPixelSort(){
   c(split, 'x',   xMul, 'a');
   c(xMul,  'out', slot, 'x');
 
+  // 3D seed = vec3(slot, slot*0.617, slot*1.293). All three randoms below
+  // share this seedVec3 — their distinct `seed` inputs (11/41/71) still make
+  // each one produce an independent value, but now the hash sees full 3D
+  // entropy instead of (0, 0, slot+offset).
+  c(slot,  'out', slotG, 'a');
+  c(slot,  'out', slotB, 'a');
+  c(slot,  'out', seed3, 'r');
+  c(slotG, 'out', seed3, 'g');
+  c(slotB, 'out', seed3, 'b');
+
   // stable hashes
   c(slot,  'out', seedSp, 'a');
   c(slot,  'out', seedHu, 'a');
@@ -1636,6 +1655,9 @@ function tplPixelSort(){
   c(seedSp,'out', speed,  'seed');
   c(seedHu,'out', hueSd,  'seed');
   c(seedPh,'out', phaseO, 'seed');
+  c(seed3, 'out', speed,  'seedVec3');
+  c(seed3, 'out', hueSd,  'seedVec3');
+  c(seed3, 'out', phaseO, 'seedVec3');
 
   // timing & dual cycles
   c(tDrip,  'out', tSpd,   'a');
