@@ -664,11 +664,20 @@ body::after{
 /* ---- bottom-right fab group (Hide + Save PNG) ---- */
 .fab-group{
   position:fixed;
-  right:24px; bottom:24px;
+  /* Position + spacing scales gently with viewport so the row doesn't
+     hug the corner on huge monitors and doesn't collide on small ones. */
+  right:clamp(12px, 1.4vw, 28px);
+  bottom:clamp(12px, 1.4vh, 28px);
   z-index:30;
   display:flex;
-  gap:10px;
+  gap:clamp(6px, 0.6vw, 12px);
   align-items:center;
+  /* Wrap onto multiple rows on narrow screens so buttons never overflow
+     past the left edge. The `justify-content` keeps wrapped rows aligned
+     to the right edge to match the un-wrapped layout. */
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  max-width:calc(100vw - 24px);
 }
 .fab-group .save-fab{
   position:static;  /* overrides the absolute positioning for individual fabs */
@@ -862,9 +871,12 @@ svg.flag-wires path.flag-wire.preview{
   position:fixed;
   right:24px; bottom:24px;
   z-index:30;
-  padding:12px 20px;
+  /* Padding, font, gap, and icon size all scale with viewport via clamp()
+     so the buttons stay readable on small monitors and don't get cartoonish
+     on huge ones. Min keeps them tappable; max prevents over-growth. */
+  padding:clamp(8px, 0.85vh, 14px) clamp(12px, 1.3vw, 24px);
   font-family:inherit;
-  font-size:10.5px;
+  font-size:clamp(9px, 0.7vw, 12px);
   letter-spacing:.26em;
   text-transform:uppercase;
   color:var(--ink);
@@ -881,7 +893,7 @@ svg.flag-wires path.flag-wire.preview{
     inset 0 1px 0 rgba(255,255,255,.24);
   display:inline-flex;
   align-items:center;
-  gap:10px;
+  gap:clamp(6px, 0.6vw, 12px);
   transition:transform .2s, box-shadow .2s;
 }
 .save-fab:hover{
@@ -891,7 +903,10 @@ svg.flag-wires path.flag-wire.preview{
     inset 0 1px 0 rgba(255,255,255,.30);
 }
 .save-fab:active{ transform:scale(.98) }
-.save-fab svg{ width:14px; height:14px }
+.save-fab svg{
+  width:clamp(11px, 0.95vw, 16px);
+  height:clamp(11px, 0.95vw, 16px);
+}
 
 /* ---- context menu ---- */
 .ctx{
