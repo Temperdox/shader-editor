@@ -87,13 +87,14 @@ body::after{
   position:fixed;
   left:50%; top:50%;
   transform:translate(-50%,-50%);
-  /* Use most of the viewport so the editor fits comfortably on small
-     monitors but caps on huge ones. The clamp keeps things sane on
-     ultrawide displays where 92vw would be hilariously wide. */
-  width:clamp(800px, 92vw, 2200px);
-  height:clamp(540px, 92vh, 1400px);
-  max-width:96vw;
-  max-height:96vh;
+  /* Sized to leave a strip of background shader visible on every side, and
+     enough vertical clearance below for the bottom-right FAB group (Hide /
+     Lighting / Shadows / Save PNG / Save Video) to sit clear of the modal.
+     Clamp keeps it sane on huge monitors. */
+  width:clamp(800px, 88vw, 2100px);
+  height:clamp(520px, 84vh, 1280px);
+  max-width:92vw;
+  max-height:88vh;     /* leaves ~12vh below for the FAB row */
   z-index:10;
 
   background:
