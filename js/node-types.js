@@ -505,6 +505,32 @@ const NODE_TYPES = {
     // rendered.
     generate:(ctx) => ({ exprs:{ out:`fract(${ctx.inputs.x})` } }),
   },
+  posterizeFloat: {
+    category:'Math', title:'Posterize (Float)', desc:'quantize float to N levels',
+    inputs:[
+      {name:'x',      type:'float', default:0.5},
+      {name:'levels', type:'float', default:4},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{
+      out: `(floor(${ctx.inputs.x} * ${ctx.inputs.levels}) / ${ctx.inputs.levels})`,
+    } }),
+  },
+  step: {
+    category:'Math', title:'Step', desc:'step(edge, x) — 0 if x < edge, else 1',
+    inputs:[
+      {name:'edge', type:'float', default:0.5},
+      {name:'x',    type:'float', default:0.0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{ out: `step(${ctx.inputs.edge}, ${ctx.inputs.x})` } }),
+  },
+  triangleWave: {
+    category:'Math', title:'Triangle Wave', desc:'0-1-0 triangle wave',
+    inputs:[{name:'x', type:'float', default:0.0}],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{ out: `abs(fract(${ctx.inputs.x} + 0.5) * 2.0 - 1.0)` } }),
+  },
   sin: {
     category:'Math', title:'Sin', desc:'sin(x)',
     inputs:[{name:'x', type:'float', default:0}],
