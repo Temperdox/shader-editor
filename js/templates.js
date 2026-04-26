@@ -1504,70 +1504,80 @@ function tplPixelFlow(){
 }
 
 /* ---- Pixel Sort — Matrix-rain drops cascading from top to bottom ---- */
-/* Each screen column gets its own falling drop with a per-column random speed
- * and color. The trick: floor(x * COLS) quantizes x into discrete column
- * indices; Random nodes seeded by the column index produce stable per-column
- * speed + hue; fract(y + time * speed) gives a sawtooth value within the
- * column whose "0" point cycles downward as time advances; pow(1 - drop, N)
- * turns that into a sharp bright head with a fading trail above. The result
- * is each column independently dripping a coloured streak. Increase COLS for
- * thinner streaks; raise the pow exponent for shorter trails. */
+/* Each screen column gets its own falling drops at a per-column random speed
+ * and color. The mechanics:
+ *   - floor(x * COLS) quantizes x into discrete column indices
+ *   - Random(col) gives stable per-column speed + hue
+ *   - fract(y * REPEAT + time * speed) is a sawtooth that cycles downward
+ *     as time advances; with REPEAT > 1 there are many drops per column
+ *   - smoothstep(0.88, 0.92, 1 - drop) is the hard-edged drop mask:
+ *     a constant-brightness band whose thickness is (1 - 0.90) / REPEAT.
+ *   The result is hundreds of small constant-brightness colored bars
+ *   continuously spawning at the top of each column and falling to the
+ *   bottom at column-specific speeds. */
 function tplPixelSort(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
   // sources
-  const uv     = n('uv',         -1340,    0);
-  const tDrip  = n('time',       -1340,  220, { scale: 1.0 });
+  const uv     = n('uv',         -1500,    0);
+  const tDrip  = n('time',       -1500,  240, { scale: 1.0 });
 
   // split UV into x, y in [0, 1]
-  const split  = n('splitVec2',  -1080,    0);
+  const split  = n('splitVec2',  -1240,    0);
 
   // ---------- per-column index ----------
-  // x * 60 → 60 columns across screen, then floor → integer column id
-  const xCol   = n('multiply',    -820, -160, {}, { b: 60.0 });
-  const col    = n('floor',       -560, -160);
+  // x * 300 → 300 narrow columns across screen, then floor → integer column id
+  const xCol   = n('multiply',    -980, -160, {}, { b: 300.0 });
+  const col    = n('floor',       -720, -160);
 
-  // distinct seeds per random call (rngHash3 inside Random reads seed +
+  // distinct seeds per random call (rngHash3 inside Random combines seed +
   // seedUV + seedVec3 — adding a different prime to col gives independent hashes)
-  const colSp  = n('add',         -300, -260, {}, { b: 11.0 });
-  const colHu  = n('add',         -300, -100, {}, { b: 41.0 });
+  const colSp  = n('add',         -460, -260, {}, { b: 11.0 });
+  const colHu  = n('add',         -460, -100, {}, { b: 41.0 });
 
-  // per-column drop speed in [0.25, 1.6] units/sec
-  const speed  = n('random',         0, -260,
+  // per-column drop speed in [0.3, 2.0] units/sec — wide variation so drops
+  // spawn continuously instead of in lockstep
+  const speed  = n('random',      -200, -260,
     { mode:'decimal', precision: 4 },
-    { min: 0.25, max: 1.6 });
+    { min: 0.3, max: 2.0 });
 
   // per-column hue seed in [0, 1] for the cosine palette
-  const hueSd  = n('random',         0, -100,
+  const hueSd  = n('random',      -200, -100,
     { mode:'decimal', precision: 4 },
     { min: 0.0,  max: 1.0 });
 
   // ---------- animated y per column ----------
-  // yAnim = y + time * speed  (so fract's "0" line cycles toward y=0 = bottom)
-  const tSpd   = n('multiply',     280,  140);
-  const yAn    = n('add',          540,  140);
+  // y * 25 → 25 simultaneous drops per column (lots of bars, thin in y)
+  const yRep   = n('multiply',    -460,  100, {}, { b: 25.0 });
+  // tSpd = time * speed (per-column scroll velocity)
+  const tSpd   = n('multiply',    -200,  240);
+  // yAn = y*25 + tSpd → cycles downward as time advances
+  const yAn    = n('add',           60,  140);
 
-  // drop position within column — sawtooth in [0, 1]
-  const drop   = n('fract',        780,  140);
+  // drop position within each band — sawtooth in [0, 1]
+  const drop   = n('fract',        320,  140);
 
-  // trail intensity: 1 - drop gives a sawtooth peaking at drop=0 (the head),
-  // pow(_, 4) sharpens the head and fades the trail upward into darkness.
-  const inv    = n('subtract',    1020,  140, {}, { a: 1.0 });
-  const trail  = n('pow',         1260,  140, {}, { e: 4.0 });
+  // 1 - drop puts the head of each drop at value 1.0
+  const inv    = n('subtract',     580,  140, {}, { a: 1.0 });
+
+  // CONSTANT-BRIGHTNESS mask (no fade): smoothstep with a narrow [0.88, 0.92]
+  // window. Inside the band brightness = 1, outside = 0, with a 1-pixel
+  // anti-aliased edge between. Drop thickness in screen space:
+  // (1 - 0.90) / 25 ≈ 0.4% of screen height (a few pixels).
+  const bright = n('smoothstep',   840,  140, {}, { a: 0.88, b: 0.92 });
 
   // ---------- per-column color ----------
-  // hue seed → cosine palette (default a/b/c/d give a full rainbow sweep)
-  const pal    = n('palette',      280, -100);
+  const pal    = n('palette',      320, -100);
 
   // ---------- composite ----------
-  // mix(black, color, trail) = color * trail. Default a is [0,0,0] (black).
-  const litCol = n('mix',         1500,    0);
+  // mix(black, color, bright) = color where the band is, black elsewhere.
+  const litCol = n('mix',         1100,    0);
 
-  // pump saturation so colors stay vivid even on the dim trail
-  const sat    = n('saturation',  1740,    0, {}, { scale: 1.35 });
+  // pump saturation so the bars read as bold, vivid lines
+  const sat    = n('saturation',  1340,    0, {}, { scale: 1.5 });
 
-  const out    = n('output',      1980,    0);
+  const out    = n('output',      1580,    0);
 
   // ---------- wiring ----------
   c(uv,    'out', split, 'v');
@@ -1582,23 +1592,28 @@ function tplPixelSort(){
   c(colSp, 'out', speed, 'seed');
   c(colHu, 'out', hueSd, 'seed');
 
-  // animated y per column
+  // y → y * 25 (more drops per column)
+  c(split, 'y',   yRep,  'a');
+
+  // time × speed → animated offset
   c(tDrip, 'out', tSpd,  'a');
   c(speed, 'out', tSpd,  'b');
-  c(split, 'y',   yAn,   'a');
+
+  // yAn = y*25 + time*speed
+  c(yRep,  'out', yAn,   'a');
   c(tSpd,  'out', yAn,   'b');
 
-  // drop sawtooth → trail intensity
-  c(yAn,   'out', drop,  'x');
-  c(drop,  'out', inv,   'b');     // a=1 default → 1 - drop
-  c(inv,   'out', trail, 'x');     // e=4 default → pow(_, 4)
+  // sawtooth → invert → constant-brightness mask
+  c(yAn,   'out', drop,   'x');
+  c(drop,  'out', inv,    'b');    // a=1 default → 1 - drop
+  c(inv,   'out', bright, 'x');    // a=0.88, b=0.92 defaults → hard-edge band
 
   // hue seed → palette color
-  c(hueSd, 'out', pal,   't');
+  c(hueSd, 'out', pal, 't');
 
-  // shade color by trail brightness, saturate, output
+  // shade color by mask, saturate, output
   c(pal,   'out', litCol, 'b');    // a=black default
-  c(trail, 'out', litCol, 't');
+  c(bright,'out', litCol, 't');
   c(litCol,'out', sat,    'rgb');
   c(sat,   'out', out,    'color');
 }
