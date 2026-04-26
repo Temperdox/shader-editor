@@ -8,6 +8,33 @@
  * The single-output shorthand: a node's generate() may return a bare string,
  * which is treated as { exprs: { <firstOutput>: string } }.
  */
+
+/* True when a connection's source is a Flag-variant output that's currently
+ * "muted" — meaning the output should NOT push a value to whatever's
+ * downstream. Two muted states:
+ *   1) the OUTPUT-side toggle is off (params.enabled[j] === false)
+ *   2) every internal wire feeding that output is gated off via the
+ *      INPUT-side toggle (params.inputEnabled[w.from] === false)
+ * In either case the compiler treats the wire as if it didn't exist, so the
+ * downstream socket falls back to its declared default literal — preventing
+ * the Flag from "overriding" downstream until re-enabled. */
+function isFlagOutputMuted(srcNode, socketName){
+  if (!srcNode) return false;
+  const t = srcNode.type;
+  if (t !== 'flag' && t !== 'flagFloat' && t !== 'flagVec2') return false;
+  const m = /^out(\d+)$/.exec(socketName);
+  if (!m) return false;
+  const j = parseInt(m[1], 10);
+  const params = srcNode.params || {};
+  const enabled      = Array.isArray(params.enabled)      ? params.enabled      : [];
+  const inputEnabled = Array.isArray(params.inputEnabled) ? params.inputEnabled : [];
+  const wires        = Array.isArray(params.wires)        ? params.wires        : [];
+  if (enabled[j] === false) return true;
+  const feeds = wires.filter(w => w.to === j);
+  if (feeds.length === 0) return true; // nothing internally wired
+  return !feeds.some(w => inputEnabled[w.from] !== false);
+}
+
 function compileGraph(){
   const output = state.nodes.find(n => n.type === 'output');
   if (!output) return { ok: false, error: 'no Fragment Output node' };
@@ -61,10 +88,17 @@ function compileGraph(){
       for (const sock of schemaInputs){
         const conn = (edgesByTo.get(nid) || []).find(e => e.to.socket === sock.name);
         if (conn){
-          const upstream = outputRefs.get(conn.from.nodeId);
-          const ref = upstream && upstream[conn.from.socket];
-          // stale connections (e.g. upstream output removed) fall back gracefully
-          inputExprs[sock.name] = ref ?? defaultLiteral(sock, node.defaults[sock.name]);
+          const srcNode = nodeById.get(conn.from.nodeId);
+          // Muted Flag outputs behave as no-connection so this socket falls
+          // back to its default literal instead of being overridden by 0.
+          if (isFlagOutputMuted(srcNode, conn.from.socket)){
+            inputExprs[sock.name] = defaultLiteral(sock, node.defaults[sock.name]);
+          } else {
+            const upstream = outputRefs.get(conn.from.nodeId);
+            const ref = upstream && upstream[conn.from.socket];
+            // stale connections (e.g. upstream output removed) fall back gracefully
+            inputExprs[sock.name] = ref ?? defaultLiteral(sock, node.defaults[sock.name]);
+          }
         } else {
           inputExprs[sock.name] = defaultLiteral(sock, node.defaults[sock.name]);
         }
@@ -81,7 +115,14 @@ function compileGraph(){
       // nodes need this — the Color node uses it so unconnected channels
       // fall back to the color-picker param instead of the socket's default.
       isConnected: (socketName) => {
-        return (edgesByTo.get(nid) || []).some(e => e.to.socket === socketName);
+        return (edgesByTo.get(nid) || []).some(e => {
+          if (e.to.socket !== socketName) return false;
+          // A muted Flag source counts as "not connected" here too, so
+          // nodes like Color (which switches between socket overrides and
+          // its picker param based on isConnected) behave consistently.
+          const srcNode = nodeById.get(e.from.nodeId);
+          return !isFlagOutputMuted(srcNode, e.from.socket);
+        });
       },
     };
 
