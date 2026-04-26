@@ -437,24 +437,26 @@ function tplBrickWall(){
 }
 
 /* ---------------- Brick Wall + Spec — diffuse + normal + spec, lit ----
- * Extends Brick Wall: same Lambert-against-Sim-Light setup as a base, plus
- * the spec map sampled and shaped by pow(lambert, 16) for a tight glossy
- * highlight that only fires where the surface is both shiny AND facing
- * the cursor light.
+ * Extends Brick Wall with three things on top of the basic lit-diffuse pipeline:
  *
- * NEW: a static high-frequency noise lane (no time, doesn't animate) acts
- * as a roughness modulator on the specular. It's gated by a Flag with a
- * single passthrough toggle:
- *   • Flag enabled  → noise darkens the highlight where the noise is
- *     bright, breaking up the smooth glossy spot into a grainy "real
- *     brick face" feel.
- *   • Flag disabled → the lane outputs vec3(0); a difference-with-white
- *     trick turns that into a (1,1,1) multiplier, which leaves the
- *     specular untouched (smooth, like before).
+ *   1. Specular highlight from the spec map shaped by pow(lambert, 16),
+ *      so a tight glossy spot only fires where the surface is both shiny
+ *      AND facing the cursor light.
  *
- * The math behind the gate: roughened_spec = spec × |white − flag.out|.
- * When flag.out = (0,0,0) the multiplier is white → no effect. When
- * flag.out is the noise vec3, the multiplier is (1 − noise) → darkening.
+ *   2. Static high-frequency noise as a roughness modulator on the spec,
+ *      gated by a Flag passthrough. Math: roughened_spec = spec ×
+ *      |white − flag.out|. Flag off → flag.out = (0,0,0) → multiplier
+ *      is white → no effect. Flag on → multiplier is (1 − noise) →
+ *      grainy darkening that breaks up the glossy spot.
+ *
+ *   3. Raycast SHADOWS from the new Shadow node. Each fragment marches
+ *      a procedural FBM heightfield toward the cursor light and returns
+ *      a 0..1 lit factor that multiplies the diffuse. With the Shadows
+ *      button off the Shadow node short-circuits to 1.0 (no effect);
+ *      preview mode always casts. Note that the shadow heightfield is
+ *      procedural noise — it won't perfectly align with the static brick
+ *      mortar pattern, but it adds atmospheric light-direction-driven
+ *      darkening that makes the wall feel deeper.
  */
 function tplBrickWallSpec(){
   _clearGraph();
@@ -476,6 +478,15 @@ function tplBrickWallSpec(){
   const lamb  = n('lambert',  -680, 120, {}, { ambient: 0.22 });
   const black = n('color',    -680, -100, { rgb: [0, 0, 0] });
   const lit   = n('mix',      -340,   20);
+
+  // --- Raycast shadow lane ---
+  // Marches a procedural FBM heightfield (scale 6 ≈ brick frequency) along
+  // the cursor's light direction, returns a 0..1 factor that we multiply
+  // into the lit diffuse. When the Shadows button is OFF the node returns
+  // 1.0 → no effect. Preview mode always casts.
+  const shad        = n('shadow',     -680, -300, { scale: 6.0, maxDist: 0.25, darkness: 0.4 });
+  const shadGray    = n('grayscale',  -340, -300);
+  const litShadowed = n('blend',         0,  -80, { mode: 'multiply' });
 
   // --- Smooth specular intensity (float) ---
   const sharp   = n('float',    -680, 340, { value: 16.0 });
@@ -526,6 +537,14 @@ function tplBrickWallSpec(){
   c(diff,  'rgb', lit, 'b');
   c(lamb,  'out', lit, 't');
 
+  // shadow factor: lit × shadow (multiplicative). Shadows reuse the same
+  // sim-light direction so the cast direction matches the lighting.
+  c(cuv,         'p',   shad, 'pos');
+  c(simL,        'out', shad, 'lightDir');
+  c(shad,        'out', shadGray, 'x');
+  c(lit,         'out', litShadowed, 'a');
+  c(shadGray,    'out', litShadowed, 'b');
+
   // smooth specular
   c(lamb,    'out', lambPow, 'x');
   c(sharp,   'out', lambPow, 'e');
@@ -553,9 +572,9 @@ function tplBrickWallSpec(){
   c(specV3,  'out', roughSpec, 'a');
   c(inverse, 'out', roughSpec, 'b');
 
-  // additive composite
-  c(lit,       'out', finalSum, 'a');
-  c(roughSpec, 'out', finalSum, 'b');
+  // additive composite — shadowed lit diffuse + (possibly roughened) spec
+  c(litShadowed, 'out', finalSum, 'a');
+  c(roughSpec,   'out', finalSum, 'b');
 
   c(finalSum, 'out', out, 'color');
 }
