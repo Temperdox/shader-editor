@@ -1503,74 +1503,104 @@ function tplPixelFlow(){
   c(post,  'out', out,   'color');
 }
 
-/* ---- Pixel Sort — Glitch-art vertical streaks dripping downward ---- */
-/* Fakes the "pixel sorting" / databending look (vertical color streaks like
- * matrix rain over a textured base). Real pixel sorting reads the previous
- * frame; we can't do that in a pure fragment shader, so we cheat: the y axis
- * of the sample UV is multiplied by 35× before sampling FBM, which compresses
- * the noise into very tall thin features → vertical streaks. Subtracting Time
- * from y makes the field flow downward. A second, low-frequency FBM sampled
- * at the un-stretched UV drives a hue shift so different streaks land on
- * different hues, and Posterize cuts the gradient into the digital bands you
- * see in real pixel-sort output. */
+/* ---- Pixel Sort — Matrix-rain drops cascading from top to bottom ---- */
+/* Each screen column gets its own falling drop with a per-column random speed
+ * and color. The trick: floor(x * COLS) quantizes x into discrete column
+ * indices; Random nodes seeded by the column index produce stable per-column
+ * speed + hue; fract(y + time * speed) gives a sawtooth value within the
+ * column whose "0" point cycles downward as time advances; pow(1 - drop, N)
+ * turns that into a sharp bright head with a fading trail above. The result
+ * is each column independently dripping a coloured streak. Increase COLS for
+ * thinner streaks; raise the pow exponent for shorter trails. */
 function tplPixelSort(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
-  const cuv    = n('centeredUV', -1140, -40);
-  const tDrip  = n('time',       -1140, 200, { scale: 1.0 });
+  // sources
+  const uv     = n('uv',         -1340,    0);
+  const tDrip  = n('time',       -1340,  220, { scale: 1.0 });
 
-  // split the centered UV so we can stretch y independently of x
-  const split  = n('splitVec2',  -840,  -40);
-  // y * 35 — squashes circular noise blobs into tall streak shapes
-  const yMul   = n('multiply',   -560,   60, {}, { b: 35.0 });
-  // (y*35) - time → the pattern flows downward as time advances
-  const ySub   = n('subtract',   -300,   60);
-  // recombine x + animated y into a stretched UV
-  const stretchUV = n('combine',  -40,  -10);
+  // split UV into x, y in [0, 1]
+  const split  = n('splitVec2',  -1080,    0);
 
-  // primary noise sampled at the stretched UV → vertical streak intensity
-  const streaks   = n('fbm',       240,  -60, { octaves: 6 });
+  // ---------- per-column index ----------
+  // x * 60 → 60 columns across screen, then floor → integer column id
+  const xCol   = n('multiply',    -820, -160, {}, { b: 60.0 });
+  const col    = n('floor',       -560, -160);
 
-  // secondary noise at the original UV → low-freq color variance per region
-  const colorBase = n('fbm',       240,  200, { octaves: 4 });
+  // distinct seeds per random call (rngHash3 inside Random reads seed +
+  // seedUV + seedVec3 — adding a different prime to col gives independent hashes)
+  const colSp  = n('add',         -300, -260, {}, { b: 11.0 });
+  const colHu  = n('add',         -300, -100, {}, { b: 41.0 });
 
-  // streak intensity → rainbow palette (default cosine palette covers full hue)
-  const pal    = n('palette',     560,  -60);
+  // per-column drop speed in [0.25, 1.6] units/sec
+  const speed  = n('random',         0, -260,
+    { mode:'decimal', precision: 4 },
+    { min: 0.25, max: 1.6 });
 
-  // hue-shift the rainbow per region so streaks settle into different colors
-  const hueAmt = n('multiply',    560,  200, {}, { b: 0.5 });
-  const hue    = n('hueShift',    860,    0);
+  // per-column hue seed in [0, 1] for the cosine palette
+  const hueSd  = n('random',         0, -100,
+    { mode:'decimal', precision: 4 },
+    { min: 0.0,  max: 1.0 });
 
-  // pump saturation up so the colors read as vivid streaks, not muddy mids
-  const sat    = n('saturation', 1100,    0, {}, { scale: 1.35 });
+  // ---------- animated y per column ----------
+  // yAnim = y + time * speed  (so fract's "0" line cycles toward y=0 = bottom)
+  const tSpd   = n('multiply',     280,  140);
+  const yAn    = n('add',          540,  140);
 
-  // posterize cuts the smooth palette into the digital bands characteristic
-  // of pixel-sort output. 22 levels = clearly stepped without going chunky.
-  const post   = n('posterize',  1340,    0, {}, { levels: 22 });
+  // drop position within column — sawtooth in [0, 1]
+  const drop   = n('fract',        780,  140);
 
-  const out    = n('output',     1580,    0);
+  // trail intensity: 1 - drop gives a sawtooth peaking at drop=0 (the head),
+  // pow(_, 4) sharpens the head and fades the trail upward into darkness.
+  const inv    = n('subtract',    1020,  140, {}, { a: 1.0 });
+  const trail  = n('pow',         1260,  140, {}, { e: 4.0 });
 
-  // wire up the UV stretch chain
-  c(cuv,   'p',  split, 'v');
-  c(split, 'y',  yMul,  'a');               // y * 35
-  c(yMul,  'out', ySub, 'a');
-  c(tDrip, 'out', ySub, 'b');               // (y*35) - time
-  c(split, 'x',  stretchUV, 'x');
-  c(ySub,  'out', stretchUV, 'y');
+  // ---------- per-column color ----------
+  // hue seed → cosine palette (default a/b/c/d give a full rainbow sweep)
+  const pal    = n('palette',      280, -100);
 
-  // sample both noise fields
-  c(stretchUV, 'xy', streaks,   'p');
-  c(cuv,       'p',  colorBase, 'p');
+  // ---------- composite ----------
+  // mix(black, color, trail) = color * trail. Default a is [0,0,0] (black).
+  const litCol = n('mix',         1500,    0);
 
-  // streak → palette → hue-shifted by colorBase → saturate → posterize → out
-  c(streaks,   'out', pal,    't');
-  c(colorBase, 'out', hueAmt, 'a');
-  c(pal,       'out', hue,    'rgb');
-  c(hueAmt,    'out', hue,    'amount');
-  c(hue,       'out', sat,    'rgb');
-  c(sat,       'out', post,   'color');
-  c(post,      'out', out,    'color');
+  // pump saturation so colors stay vivid even on the dim trail
+  const sat    = n('saturation',  1740,    0, {}, { scale: 1.35 });
+
+  const out    = n('output',      1980,    0);
+
+  // ---------- wiring ----------
+  c(uv,    'out', split, 'v');
+
+  // column index from x
+  c(split, 'x',   xCol,  'a');
+  c(xCol,  'out', col,   'x');
+
+  // per-column random seeds
+  c(col,   'out', colSp, 'a');
+  c(col,   'out', colHu, 'a');
+  c(colSp, 'out', speed, 'seed');
+  c(colHu, 'out', hueSd, 'seed');
+
+  // animated y per column
+  c(tDrip, 'out', tSpd,  'a');
+  c(speed, 'out', tSpd,  'b');
+  c(split, 'y',   yAn,   'a');
+  c(tSpd,  'out', yAn,   'b');
+
+  // drop sawtooth → trail intensity
+  c(yAn,   'out', drop,  'x');
+  c(drop,  'out', inv,   'b');     // a=1 default → 1 - drop
+  c(inv,   'out', trail, 'x');     // e=4 default → pow(_, 4)
+
+  // hue seed → palette color
+  c(hueSd, 'out', pal,   't');
+
+  // shade color by trail brightness, saturate, output
+  c(pal,   'out', litCol, 'b');    // a=black default
+  c(trail, 'out', litCol, 't');
+  c(litCol,'out', sat,    'rgb');
+  c(sat,   'out', out,    'color');
 }
 
 /* ---- Cosmic Star — Soft Glow + Starburst + HDR Boost ---- */
