@@ -708,7 +708,7 @@ body.light-bulb-active{ cursor:none; }
   border-color:rgba(185,165,255,.9);
 }
 .flag-pt input[type=checkbox]:checked::after{
-  content:""; position:absolute; left:2px; top:-1px;
+  content:""; position:absolute; left:3px; top:1px;
   width:3px; height:7px;
   border:solid #1a1520;
   border-width:0 1.5px 1.5px 0;
