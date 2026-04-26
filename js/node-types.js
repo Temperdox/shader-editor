@@ -269,6 +269,7 @@ const NODE_TYPES = {
   /* ---- inputs ---- */
   time: {
     category:'Input', title:'Time', desc:'u_time uniform (seconds) × scale',
+    info:'Outputs the running time in seconds, optionally multiplied by `scale`. Plug into noise nodes\' z input, the t input of pattern nodes, or any animated parameter to drive movement. scale=1 means real seconds; scale<1 slows things down, scale>1 speeds them up. A scale of 0 freezes the animation.',
     inputs:[], outputs:[{name:'out', type:'float'}],
     params:[{name:'scale', kind:'number', default:1.0, step:0.01}],
     // when scale==1 we emit the bare `u_time` identifier so downstream nodes
@@ -281,12 +282,14 @@ const NODE_TYPES = {
   },
   uv: {
     category:'Input', title:'UV', desc:'0..1 coords across the quad',
+    info:'Built-in screen coordinates from (0, 0) at the bottom-left to (1, 1) at the top-right. Use as the base coordinate for any pattern that should fill the canvas. Note: it doesn\'t compensate for aspect ratio — patterns sampled from this will look stretched horizontally on widescreen displays. For radially-symmetric or aspect-corrected effects use Centered UV instead.',
     inputs:[], outputs:[{name:'out', type:'vec2'}],
     preview:'uv',   // renders a (u, v, 0) gradient thumbnail in the node body
     generate:() => ({ exprs:{ out:'v_uv' } }),
   },
   centeredUV: {
     category:'Input', title:'Centered UV', desc:'UV re-centered (-0.5..0.5) w/ aspect',
+    info:'Same coordinate space as UV but re-centered so (0, 0) is the screen middle, and the X axis is pre-multiplied by aspect ratio so circles stay round. Use as the input for anything radial — vignette, swirl, kaleidoscope, SDFs, palette gradients radiating from center. The `dist` output gives length(p), the distance from center, handy for radial fades.',
     inputs:[], outputs:[{name:'p', type:'vec2'}, {name:'dist', type:'float'}],
     preview:'centeredUV',  // origin-at-center variant (|x|, |y|, 0) so it reads differently from plain UV
     generate:(ctx) => {
@@ -299,11 +302,13 @@ const NODE_TYPES = {
   },
   mouse: {
     category:'Input', title:'Mouse', desc:'normalized cursor (0..1)',
+    info:'Raw cursor position normalized to (0,0)..(1,1) over the canvas. Useful for one-off mouse interactions or building debug widgets. For most cursor-following lighting effects prefer Cursor (always live, in centered-UV space) or Sim Light (toggle-driven via the Lighting button).',
     inputs:[], outputs:[{name:'out', type:'vec2'}],
     generate:() => ({ exprs:{ out:'u_mouse' } }),
   },
   cursorPos: {
     category:'Input', title:'Cursor', desc:'cursor position in centred UV space (always live, no toggle)',
+    info:'Cursor position in centered-UV space, always live (no Lighting toggle needed). Use as the `center` input for radial effects you want to follow the mouse — Soft Glow, Mouse Glow, custom distance fields, etc.',
     inputs:[], outputs:[{name:'pos', type:'vec2'}],
     // Derived from `u_mouse` (which always tracks the pointer regardless of
     // the Lighting button) and re-centred + aspect-corrected to match
@@ -317,11 +322,13 @@ const NODE_TYPES = {
   },
   resolution: {
     category:'Input', title:'Resolution', desc:'canvas size in px',
+    info:'Canvas size in pixels as a vec2 (width, height). Useful for converting normalized UV into pixel coordinates, or for aspect-correcting custom math when you can\'t use Centered UV.',
     inputs:[], outputs:[{name:'out', type:'vec2'}],
     generate:() => ({ exprs:{ out:'u_resolution' } }),
   },
   viewDir: {
     category:'Input', title:'View Dir', desc:'camera/view direction (vec3)',
+    info:'Camera / view direction as a vec3. The current renderer is 2D so this is essentially constant (0, 0, 1) — reserved for future view-aware effects. Mostly used today as the V input for Fresnel.',
     inputs:[], outputs:[{name:'out', type:'vec3'}],
     params:[{name:'dir', kind:'vec2', default:[0, 0], step:0.01}],   // tilt xy, z is auto
     // For our fullscreen-quad setup the "camera" looks along +Z, so (0,0,1)
@@ -334,6 +341,7 @@ const NODE_TYPES = {
   },
   simLight: {
     category:'Input', title:'Sim Light', desc:'cursor-driven point-light direction + position',
+    info:'When the Lighting button is on, this is a unit-length direction vector pointing from each fragment toward the cursor-driven point light. When Lighting is off it returns (0, 0, 1) — straight on. Plug into Lambert, Fresnel, Shadow, and similar nodes as the `L` input to get interactive cursor-tracked lighting.',
     inputs:[
       // Wire Centered UV's `p` here for true per-fragment point-light
       // shading (each pixel sees the cursor as a local light). Leave
@@ -358,6 +366,7 @@ const NODE_TYPES = {
   },
   worldNormal: {
     category:'Input', title:'World Normal', desc:'per-fragment 3D normal from the test surface',
+    info:'Per-fragment 3D normal computed from the test surface\'s procedural height field (the `Surface` button toggle). Returns (0, 0, 1) when Surface is off — i.e. a flat plane facing the camera. Plug into Lambert as `N` for surface-aware diffuse shading; combine with Sim Light for cursor-driven highlights.',
     inputs:[], outputs:[{name:'out', type:'vec3'}],
     // Exposes the `v_surfaceNormal` varying produced by the vertex shader.
     // When the Surface button is OFF the test mesh stays flat and the
@@ -369,6 +378,7 @@ const NODE_TYPES = {
   },
   lightDir: {
     category:'Input', title:'Light Dir', desc:'directional light (vec3, normalized)',
+    info:'A static directional-light vector you set in the parameter panel. Use when you want fixed lighting from a known direction (e.g., a sun) instead of the cursor-driven Sim Light. Wire into Lambert, Fresnel, etc. as L.',
     inputs:[], outputs:[{name:'out', type:'vec3'}],
     params:[
       {name:'x', kind:'number', default:0.4,  step:0.01},
@@ -383,12 +393,14 @@ const NODE_TYPES = {
   },
   float: {
     category:'Input', title:'Float', desc:'scalar constant',
+    info:'A scalar constant — pick any number and route its single output anywhere a float input is needed. Great as a \'tunable knob\': make one Float node feed many downstream nodes, then change just the Float to retune the whole effect.',
     inputs:[], outputs:[{name:'out', type:'float'}],
     params:[{name:'value', kind:'number', default:1.0, step:0.01}],
     generate:(ctx) => ({ exprs:{ out:`float(${glslNum(ctx.params.value)})` } }),
   },
   vec2: {
     category:'Input', title:'Vec2', desc:'2-component constant',
+    info:'A 2-component constant. Use as a fixed offset, frequency vec2, or 2D point parameter (e.g. the center of a Polar or SDF Circle). For per-channel inputs from other nodes, use Combine (Floats → vec2/vec3) instead.',
     inputs:[], outputs:[{name:'out', type:'vec2'}],
     params:[{name:'xy', kind:'vec2', default:[1, 1], step:0.01}],
     generate:(ctx) => {
@@ -398,6 +410,7 @@ const NODE_TYPES = {
   },
   color: {
     category:'Input', title:'Color', desc:'vec3 RGB — channels overridable by inputs',
+    info:'An RGB color picker. Wire its `out` anywhere a vec3 color input is needed (Mix, Blend, Output, palette tints, etc.). The R/G/B inputs override individual channels per-pixel — leave them disconnected for a flat picked color, or wire them up to drive each channel from different sources.',
     // Each channel has an optional float input. When wired, that input drives
     // the channel (e.g. a Random for a pastel-shifting color). When NOT wired,
     // the `rgb` color-picker param supplies the value. `noInline:true` keeps
@@ -423,30 +436,35 @@ const NODE_TYPES = {
   /* ---- math / vector ---- */
   add: {
     category:'Math', title:'Add', desc:'a + b',
+    info:'Component-wise float addition: `out = a + b`. Use to offset values, accumulate signals, or shift positions. For vec3/vec4 add use a Blend node in \'add\' mode. Default a/b = 0 means an unconnected Add is a passthrough for whichever side IS connected.',
     inputs:[{name:'a', type:'float', default:0}, {name:'b', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.a} + ${ctx.inputs.b})` } }),
   },
   subtract: {
     category:'Math', title:'Subtract', desc:'a − b',
+    info:'Float subtraction: `out = a - b`. Use to compute differences (e.g. `time - threshold` for cycle phases) or to invert via `1 - x` (set a default to 1 and connect to b).',
     inputs:[{name:'a', type:'float', default:0}, {name:'b', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.a} - ${ctx.inputs.b})` } }),
   },
   multiply: {
     category:'Math', title:'Multiply', desc:'a * b',
+    info:'Float multiplication: `out = a * b`. The workhorse for scaling values: feed a noise output through Multiply with b=0.5 to halve its amplitude, or feed Time through Multiply to retune speed. For scaling vec3 use the Strength node; for vec2 use Scale Vec2.',
     inputs:[{name:'a', type:'float', default:1}, {name:'b', type:'float', default:1}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.a} * ${ctx.inputs.b})` } }),
   },
   divide: {
     category:'Math', title:'Divide', desc:'a / b',
+    info:'Float division: `out = a / b`. Less common than Multiply since x/N is the same as x*(1/N) but more readable when the divisor is dynamic. Watch out for b=0 producing NaN/Inf — clamp the divisor if it can hit zero.',
     inputs:[{name:'a', type:'float', default:1}, {name:'b', type:'float', default:1}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.a} / ${ctx.inputs.b})` } }),
   },
   mix: {
     category:'Math', title:'Mix', desc:'lerp a → b by t',
+    info:'Linear interpolation between two vec3 colors: `out = (1-t)*a + t*b`, with t clamped to [0,1]. Use to blend between two colors based on a mask. With a=black (default) and b=color, this becomes \'color × t\' — the standard way to scale a vec3 by a float without a Strength node.',
     inputs:[
       {name:'a', type:'vec3', default:[0,0,0]},
       {name:'b', type:'vec3', default:[1,1,1]},
@@ -459,6 +477,7 @@ const NODE_TYPES = {
   },
   lerp: {
     category:'Math', title:'Lerp', desc:'float lerp: mix(a, b, t)',
+    info:'Linear interpolation between two FLOAT values, clamped: `out = mix(a, b, clamp(t, 0, 1))`. The float-typed sibling of Mix — use whenever you need to blend two scalar masks/values. Don\'t use Mix on floats: it\'s declared vec3-out and will produce a dimension-mismatch shader error.',
     inputs:[
       {name:'a', type:'float', default:0},
       {name:'b', type:'float', default:1},
@@ -475,18 +494,21 @@ const NODE_TYPES = {
   },
   pow: {
     category:'Math', title:'Power', desc:'pow(|x|, e)',
+    info:'Raises |x| to the e-th power. Used for sharpening curves (pow with e>1 pushes mid-tones toward 0, accentuating peaks) or softening them (e<1). The abs is there so negative inputs don\'t return NaN — feed signed values through abs() first if you want to preserve sign.',
     inputs:[{name:'x', type:'float', default:1}, {name:'e', type:'float', default:2}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`pow(abs(${ctx.inputs.x}), ${ctx.inputs.e})` } }),
   },
   abs: {
     category:'Math', title:'Abs', desc:'|x|',
+    info:'Absolute value: returns |x|. Used to fold signed values to positive (e.g., turning a sin wave into a triangle wave-ish shape with abs(sin)). Pair with sign() if you need to preserve sign separately.',
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`abs(${ctx.inputs.x})` } }),
   },
   floor: {
     category:'Math', title:'Floor', desc:'floor(x) — round down to integer',
+    info:'Rounds x DOWN to the nearest integer. Combined with Time gives \'tick every N seconds\' (floor(time*N)/N). Combined with UV*N gives a \'pixelate\' effect — `floor(uv*N)/N` quantizes to N cells.',
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     // Pair with a scaled Time to get stepped values ("tick every N seconds"),
@@ -496,6 +518,7 @@ const NODE_TYPES = {
   },
   fract: {
     category:'Math', title:'Fract', desc:'fract(x) — fractional part (x − floor(x))',
+    info:'Returns the fractional part of x: `x - floor(x)`. Output is always in [0, 1). Pairs with Floor for periodic effects (fract(t) cycles 0→1 every unit of t) and is the basis of repeating patterns: fract(uv*N) gives N tiled copies of [0,1] across the canvas.',
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     // Pairs nicely with Floor: fract(t) gives the 0..1 progress within the
@@ -507,6 +530,7 @@ const NODE_TYPES = {
   },
   posterizeFloat: {
     category:'Math', title:'Posterize (Float)', desc:'quantize float to N levels',
+    info:'Quantizes a smooth float to N discrete steps: `floor(x * levels) / levels`. Use to make smooth gradients look stair-stepped (cel-shading, glitch-art banding). Works on any 0..1-ish input — try posterizing time-driven values for stuttery motion, or posterizing noise for blocky patterns.',
     inputs:[
       {name:'x',      type:'float', default:0.5},
       {name:'levels', type:'float', default:4},
@@ -518,6 +542,7 @@ const NODE_TYPES = {
   },
   step: {
     category:'Math', title:'Step', desc:'step(edge, x) — 0 if x < edge, else 1',
+    info:'Hard binary threshold: returns 0 if x < edge, else 1. The aliased version of Smoothstep — use when you want a sharp on/off transition with no anti-aliased edge (glitch art, mask gates). For soft transitions use Smoothstep instead.',
     inputs:[
       {name:'edge', type:'float', default:0.5},
       {name:'x',    type:'float', default:0.0},
@@ -527,24 +552,28 @@ const NODE_TYPES = {
   },
   triangleWave: {
     category:'Math', title:'Triangle Wave', desc:'0-1-0 triangle wave',
+    info:'Periodic 0→1→0 zigzag (period 1). Linear ramp up then linear ramp down — the \'mechanical\' counterpart to Sin\'s smooth wave. Use to drive cyclic motion that should feel rigid/glitchy rather than organic.',
     inputs:[{name:'x', type:'float', default:0.0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out: `abs(fract(${ctx.inputs.x} + 0.5) * 2.0 - 1.0)` } }),
   },
   sin: {
     category:'Math', title:'Sin', desc:'sin(x)',
+    info:'Standard sine: `sin(x)` returns -1..1 with period 2π. Pair with Time as input for smooth oscillation, or with position for spatial waves. To get an output in 0..1 range use Pulse (which is `0.5 + 0.5*sin(2π*t*freq)`).',
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`sin(${ctx.inputs.x})` } }),
   },
   cos: {
     category:'Math', title:'Cos', desc:'cos(x)',
+    info:'Standard cosine: `cos(x)` returns -1..1, identical to sin but phase-shifted by π/2. Useful when you want two waves 90° out of sync (e.g., circular motion: x = cos(t), y = sin(t)).',
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`cos(${ctx.inputs.x})` } }),
   },
   clamp: {
     category:'Math', title:'Clamp', desc:'clamp(x, a, b)',
+    info:'Restricts x to the range [a, b]: returns a if x<a, b if x>b, else x unchanged. Use to prevent mask values from going outside [0, 1], to bound noise outputs, or to define safe ranges for downstream math.',
     inputs:[
       {name:'x', type:'float', default:0},
       {name:'a', type:'float', default:0},
@@ -557,6 +586,7 @@ const NODE_TYPES = {
   },
   smoothstep: {
     category:'Math', title:'Smoothstep', desc:'smoothstep(a, b, x)',
+    info:'Soft S-curve threshold between a and b: returns 0 below a, 1 above b, with a smoothly interpolated rise in between. Use for anti-aliased mask edges, soft falloff zones, or wherever you\'d reach for `step()` but want it look organic. Requires a < b for defined behavior — flip your math if you need an inverse (or subtract from 1).',
     inputs:[
       {name:'a', type:'float', default:0},
       {name:'b', type:'float', default:1},
@@ -569,12 +599,14 @@ const NODE_TYPES = {
   },
   length: {
     category:'Math', title:'Length', desc:'length(v)',
+    info:'Euclidean magnitude of a vec2: `sqrt(x² + y²)`. Use to convert a 2D position into a scalar distance from origin (e.g. for radial gradients), or to measure the strength of a 2D vector.',
     inputs:[{name:'v', type:'vec2', default:[0,0]}],
     outputs:[{name:'out', type:'float'}],
     generate:(ctx) => ({ exprs:{ out:`length(${ctx.inputs.v})` } }),
   },
   dot: {
     category:'Math', title:'Dot', desc:'dot(a, b) — vec3 · vec3 → float',
+    info:'Inner product of two vec3s: `a.x*b.x + a.y*b.y + a.z*b.z`. Result is positive when the vectors point similar ways, zero when perpendicular, negative when opposite. The basis of Lambert lighting (dot(N, L)) and any \'how aligned are these directions\' computation.',
     inputs:[
       {name:'a', type:'vec3', default:[1, 0, 0]},
       {name:'b', type:'vec3', default:[0, 0, 1]},
@@ -586,6 +618,7 @@ const NODE_TYPES = {
   },
   cross: {
     category:'Math', title:'Cross', desc:'cross(a, b) — vec3 × vec3 → vec3',
+    info:'Vector cross product of two vec3s — returns a vec3 perpendicular to both, with magnitude = |a||b|sin(θ). Used to build basis vectors, compute surface tangents, or generate a third axis from two known ones.',
     inputs:[
       {name:'a', type:'vec3', default:[1, 0, 0]},
       {name:'b', type:'vec3', default:[0, 1, 0]},
@@ -595,6 +628,7 @@ const NODE_TYPES = {
   },
   min: {
     category:'Math', title:'Min', desc:'min(a, b)',
+    info:'Element-wise minimum of two floats. Use for SDF unions (`min(a, b)` is the distance to the closer of two shapes), or to clip a value\'s upper bound.',
     inputs:[
       {name:'a', type:'float', default:0},
       {name:'b', type:'float', default:0},
@@ -604,6 +638,7 @@ const NODE_TYPES = {
   },
   max: {
     category:'Math', title:'Max', desc:'max(a, b)',
+    info:'Element-wise maximum of two floats. Use for SDF intersections (`max(a, b)` keeps only the overlap), or to clip a value\'s lower bound. Pair with min for clamp-style ranges.',
     inputs:[
       {name:'a', type:'float', default:0},
       {name:'b', type:'float', default:0},
@@ -613,6 +648,7 @@ const NODE_TYPES = {
   },
   pulse: {
     category:'Math', title:'Pulse', desc:'0→1→0 sinusoidal pulse (freq = cycles/unit)',
+    info:'Smooth 0..1 oscillation: `0.5 + 0.5 * sin(2π * t * freq)`. The \'always-positive sin\' that\'s directly usable as a mask or animation curve. Feed t = Time for steady rhythm, t = position for spatial waves, freq controls cycles per unit.',
     inputs:[
       {name:'t',    type:'float', default:0},
       {name:'freq', type:'float', default:1},
@@ -627,6 +663,7 @@ const NODE_TYPES = {
   },
   ease: {
     category:'Math', title:'Ease', desc:'easing curve on 0..1 (in / out / inOut)',
+    info:'Reshapes a linear 0..1 progression into an eased curve via the `mode` parameter. `in` = slow start / fast end (t²), `out` = fast start / slow end, `inOut` = classic S-curve. Wrap around any linear driver (lerp factor, animation timer) to make movement feel less mechanical.',
     inputs:[{name:'t', type:'float', default:0.5}],
     outputs:[{name:'out', type:'float'}],
     params:[{name:'mode', kind:'segmented', default:'inOut', options:['in', 'out', 'inOut']}],
@@ -657,6 +694,7 @@ const NODE_TYPES = {
      decimal mode uses `precision` to quantize to N places after the dot. */
   random: {
     category:'Math', title:'Random', desc:'pseudo-random float in [min, max]',
+    info:'Per-input pseudo-random float in [min, max]. The seed is `seedVec3 + vec3(seedUV, seed)` — different inputs give different outputs. For stable per-cell randoms, feed an integer (e.g., from Floor) as `seed`. Set `precision` to control how many distinct values are possible. `mode=\'integer\'` rounds the output. The hash works best when all three seed dimensions vary — wiring only `seed` produces visible periodic patterns; build a vec3 seed from multiple slot-derived values for clean randomness.',
     inputs:[
       {name:'seed',     type:'float', default:0},
       {name:'seedUV',   type:'vec2',  default:[0,0]},
@@ -700,12 +738,14 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
 
   makeVec2: {
     category:'Vector', title:'Make Vec2', desc:'vec2(x, y)',
+    info:'Builds a vec2 from two floats: `vec2(x, y)`. Use whenever a downstream node needs a vec2 but you have the components separately (e.g., after Split Vec2, after math, or to bridge Float constants).',
     inputs:[{name:'x', type:'float', default:0}, {name:'y', type:'float', default:0}],
     outputs:[{name:'out', type:'vec2'}],
     generate:(ctx) => ({ exprs:{ out:`vec2(${ctx.inputs.x}, ${ctx.inputs.y})` } }),
   },
   makeVec3: {
     category:'Vector', title:'Make Vec3', desc:'vec3(r, g, b)',
+    info:'Builds a vec3 from three floats: `vec3(r, g, b)`. Useful for constructing colors from individual channel computations or building 3D positions/normals from separate axes.',
     inputs:[
       {name:'r', type:'float', default:0},
       {name:'g', type:'float', default:0},
@@ -718,6 +758,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   splitVec3: {
     category:'Vector', title:'Split Vec3', desc:'vec3 → r, g, b',
+    info:'Decomposes a vec3 into its three float components. Use to extract individual channels (R, G, B from a color; X, Y, Z from a position) so you can do per-channel math, then recombine with Make Vec3.',
     inputs:[{name:'v', type:'vec3', default:[0,0,0]}],
     outputs:[{name:'r', type:'float'}, {name:'g', type:'float'}, {name:'b', type:'float'}],
     generate:(ctx) => {
@@ -730,6 +771,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   splitVec2: {
     category:'Vector', title:'Split Vec2', desc:'vec2 → x, y',
+    info:'Decomposes a vec2 into x and y floats. Standard pattern: split a UV, manipulate one axis (e.g., add time to y for vertical scrolling), then recombine via Make Vec2 or Combine.',
     inputs:[{name:'v', type:'vec2', default:[0,0]}],
     outputs:[{name:'x', type:'float'}, {name:'y', type:'float'}],
     generate:(ctx) => {
@@ -744,6 +786,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
      vec3 (xyz) out so it covers most downstream needs with one node. */
   combine: {
     category:'Vector', title:'Combine', desc:'build vec3 (xyz) + vec2 (xy)',
+    info:'Builds a vec3 (xyz) AND vec2 (xy) from three float inputs at once — same as Unity\'s. Lets you pick whichever output type the next node needs. Z is ignored for the xy output.',
     inputs:[
       {name:'x', type:'float', default:0},
       {name:'y', type:'float', default:0},
@@ -760,12 +803,14 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   scaleVec2: {
     category:'Vector', title:'Scale Vec2', desc:'v * s',
+    info:'Multiplies a vec2 by a float scalar: `out = v * s`. Use to scale UVs (zoom in/out on a pattern), shrink/grow offsets, or normalize 2D vectors after dividing by length.',
     inputs:[{name:'v', type:'vec2', default:[0,0]}, {name:'s', type:'float', default:1}],
     outputs:[{name:'out', type:'vec2'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.v} * ${ctx.inputs.s})` } }),
   },
   scaleVec3: {
     category:'Vector', title:'Scale Vec3', desc:'v * s',
+    info:'Multiplies a vec3 by a float scalar: `out = v * s`. The vec3 sibling of Scale Vec2 — use to scale colors, normals, or positions. For semantically-named effect tuning prefer the Strength node.',
     inputs:[{name:'v', type:'vec3', default:[0,0,0]}, {name:'s', type:'float', default:1}],
     outputs:[{name:'out', type:'vec3'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.v} * ${ctx.inputs.s})` } }),
@@ -787,6 +832,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   strengthVec2: {
     category:'Effect', title:'Strength (Vec2)', desc:'scale a vec2 (UV/offset) by a strength amount',
+    info:'Vec2 version of Strength — scales a UV/offset by a strength amount. Use to attenuate a domain-warp source, dial down a parallax offset, or zero out a transformation temporarily without disconnecting wires.',
     inputs:[
       {name:'in',       type:'vec2',  default:[0,0]},
       {name:'strength', type:'float', default:1},
@@ -796,6 +842,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   strengthFloat: {
     category:'Effect', title:'Strength (Float)', desc:'scale a float by a strength amount',
+    info:'Float version of Strength — semantic alias for Multiply with named inputs (\'in\' and \'strength\' instead of \'a\' and \'b\'). Reads more clearly when you mean \'scale this signal by this amount\' rather than abstract multiplication.',
     inputs:[
       {name:'in',       type:'float', default:0},
       {name:'strength', type:'float', default:1},
@@ -805,6 +852,7 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   parallaxUV: {
     category:'Vector', title:'Parallax UV', desc:'shift UV by direction × depth (per-layer parallax)',
+    info:'Shifts a UV by `direction * depth`. Originally for parallax layering: feed cursor offset into direction and a per-layer depth (small = distant, large = foreground) to make the foreground move more than the background. Also handy as a constant UV offset (set direction = (a, b), depth = 1) to break the \'always sampling at origin\' degeneracy in noise/voronoi.',
     inputs:[
       {name:'uv',        type:'vec2',  default:[0, 0]},
       {name:'direction', type:'vec2',  default:[0, 0]},   // cursor offset, time-based, etc.
@@ -822,18 +870,21 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
   },
   grayscale: {
     category:'Vector', title:'Grayscale', desc:'float → vec3 (x, x, x)',
+    info:'Converts a single float to a vec3 by repeating the value in all three channels: `vec3(x, x, x)`. Use to bridge a float mask into a vec3 input slot, or to visualize a scalar field as gray.',
     inputs:[{name:'x', type:'float', default:0}],
     outputs:[{name:'out', type:'vec3'}],
     generate:(ctx) => ({ exprs:{ out:`vec3(${ctx.inputs.x})` } }),
   },
   normalToColor: {
     category:'Vector', title:'Normal to Color', desc:'(-1..1) → (0..1) RGB preview',
+    info:'Remaps a vec3 in -1..1 range to 0..1 RGB so you can preview it as a normal map (the classic blue/purple look). Useful for debugging — pipe any vec3 normal through this to see it as the standard tangent-space normal-map encoding.',
     inputs:[{name:'n', type:'vec3', default:[0, 0, 1]}],
     outputs:[{name:'out', type:'vec3'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.n} * 0.5 + 0.5)` } }),
   },
   rotateUV: {
     category:'Vector', title:'Rotate UV', desc:'rotate a vec2 around a pivot by angle (rad)',
+    info:'Rotates a vec2 around a pivot point by an angle in radians. Use to spin patterns, animate rotation (feed Time as angle), or correct misaligned UV sources. Combine with Polar for radial spin effects.',
     inputs:[
       {name:'uv',    type:'vec2',  default:[0.5, 0.5]},
       {name:'angle', type:'float', default:0},
@@ -860,6 +911,7 @@ vec2 ${q}   = ${ctx.inputs.uv} - ${ctx.inputs.pivot};`,
   },
   polar: {
     category:'Vector', title:'Polar', desc:'vec2 → (radius, angle) around a pivot',
+    info:'Converts a vec2 around a pivot into (radius, angle): handy for radial / circular patterns. Feed the radius output into a 1D pattern (Stripes, Pulse) for radial bands, or feed the angle into a palette for radial color sweeps.',
     inputs:[
       {name:'uv',    type:'vec2', default:[0.5, 0.5]},
       {name:'pivot', type:'vec2', default:[0.5, 0.5]},
@@ -885,6 +937,7 @@ vec2 ${q}   = ${ctx.inputs.uv} - ${ctx.inputs.pivot};`,
   },
   hsv2rgb: {
     category:'Vector', title:'HSV → RGB', desc:'hue (0..1) + sat + value → RGB',
+    info:'Converts an HSV color (hue 0..1, saturation 0..1, value 0..1) to RGB. Use when you want to compute colors via hue rotation or saturation control — easier than mixing primary RGB.',
     inputs:[
       {name:'h', type:'float', default:0},
       {name:'s', type:'float', default:1},
@@ -901,6 +954,7 @@ vec2 ${q}   = ${ctx.inputs.uv} - ${ctx.inputs.pivot};`,
   },
   palette: {
     category:'Vector', title:'Palette', desc:'iq cosine palette: a + b·cos(2π·(c·t + d))',
+    info:'iq\'s cosine palette: `a + b*cos(2π*(c*t + d))`. With defaults (gray, gray, white, (0,0.33,0.67)) it produces a full rainbow as t goes 0..1. Override a/b/c/d via Color or Combine nodes to design custom palettes — see iquilezles.org/articles/palettes for great presets. The cheapest way to turn a scalar (noise, mask) into a vibrant color.',
     inputs:[
       {name:'t', type:'float', default:0},
       {name:'a', type:'vec3',  default:[0.5, 0.5, 0.5]},
@@ -919,6 +973,7 @@ vec2 ${q}   = ${ctx.inputs.uv} - ${ctx.inputs.pivot};`,
   },
   kaleidoscope: {
     category:'Vector', title:'Kaleidoscope', desc:'N-fold mirror fold around a pivot',
+    info:'N-fold mirror fold around a pivot. Folds the polar angle into a single sector, then mirrors it. Feed the output into ANY downstream pattern (noise, voronoi, SDFs) to get instant N-way rotational symmetry — great for tile / mandala / fractal-flower visuals.',
     inputs:[
       {name:'uv',      type:'vec2',  default:[0.5, 0.5]},
       {name:'sectors', type:'float', default:6},
@@ -949,6 +1004,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   pixelate: {
     category:'Vector', title:'Pixelate', desc:'quantize UV to an N × N grid',
+    info:'Snaps a UV to an N×N grid: `floor(uv*cells)/cells`. Each pixel within a cell sees the same constant UV, so downstream patterns render as flat tiles — the standard \'retro / 8-bit\' look. Increase `cells` for finer pixels.',
     inputs:[
       {name:'uv',    type:'vec2',  default:[0, 0]},
       {name:'cells', type:'float', default:48},
@@ -964,6 +1020,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   chromaShiftUV: {
     category:'Vector', title:'Chromatic UV', desc:'three offset UVs for R/G/B prism split',
+    info:'Outputs three slightly-offset UVs (one per RGB channel) so you can sample a base texture three times and recombine into a chromatic-aberration / prism-split effect. Wire each output through a Texture / pattern node, then use Combine or Make Vec3 to stack the channels.',
     inputs:[
       {name:'uv',        type:'vec2',  default:[0, 0]},
       {name:'direction', type:'vec2',  default:[1, 0]},
@@ -992,6 +1049,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   rgb2hsv: {
     category:'Vector', title:'RGB → HSV', desc:'inverse of HSV→RGB',
+    info:'Inverse of HSV→RGB — extracts hue/saturation/value from an RGB color. Use when you want to manipulate one of those properties (rotate hue, scale saturation) and convert back, OR to use hue as a mask/comparison value.',
     inputs:[{name:'rgb', type:'vec3', default:[1, 0, 0]}],
     outputs:[
       {name:'h', type:'float'},
@@ -1013,6 +1071,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   hueShift: {
     category:'Vector', title:'Hue Shift', desc:'rotate hue of an RGB color by amount (0..1 = full rotation)',
+    info:'Rotates an RGB color\'s hue by `amount` (1.0 = full 360° rotation). Round-trips through HSV. amount=0.5 gives the complement; amount=Time gives continuous hue cycling. Cheap way to tint or animate any color source.',
     inputs:[
       {name:'rgb',    type:'vec3',  default:[1, 0, 0]},
       {name:'amount', type:'float', default:0.0},
@@ -1034,6 +1093,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   saturation: {
     category:'Vector', title:'Saturation', desc:'scale saturation (0 = gray, 1 = unchanged, >1 = boosted)',
+    info:'Luminance-preserving saturation adjustment: `mix(gray, color, scale)`. scale=0 → grayscale, 1 → identity, >1 → boosted vivid. Pumps colors toward / away from gray without changing perceived brightness.',
     inputs:[
       {name:'rgb',   type:'vec3',  default:[1, 0, 0]},
       {name:'scale', type:'float', default:1.0},
@@ -1053,6 +1113,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   rotateVec3: {
     category:'Vector', title:'Rotate Vec3', desc:'rotate vec3 around axis by angle (rad)',
+    info:'Rodrigues\' formula — rotates any vec3 around an arbitrary axis by an angle in radians. Use to rotate normals for custom lighting, animate a vec3 direction, or build coordinate-frame transformations.',
     inputs:[
       {name:'v',     type:'vec3',  default:[1, 0, 0]},
       {name:'axis',  type:'vec3',  default:[0, 1, 0]},
@@ -1068,6 +1129,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   warpUV: {
     category:'Vector', title:'Warp UV', desc:'uv + warp (domain warp — use noise as warp source)',
+    info:'Domain warp: `out = uv + warp`. The classic technique for organic-looking patterns — sample a noise field, build a vec2 from two scaled noise samples, feed it as `warp` to bend the input UV before sampling another pattern. Cells / lines / shapes downstream gain wavy, hand-drawn boundaries.',
     inputs:[
       {name:'uv',   type:'vec2',  default:[0, 0]},
       {name:'warp', type:'vec2',  default:[0, 0]},
@@ -1082,6 +1144,7 @@ ${a} = abs(mod(${a}, ${sw}) - ${sw} * 0.5);`,
   },
   swirl: {
     category:'Vector', title:'Swirl', desc:'spiral rotation — angle grows with distance from center',
+    info:'Spirals UV around a center, with rotation angle that grows with distance from that center. Inner pixels barely move, outer pixels spin a lot — gives the classic \'whirlpool\' / \'twirl\' distortion. Use Strength to tune the swirl amount.',
     inputs:[
       {name:'uv',       type:'vec2',  default:[0.5, 0.5]},
       {name:'center',   type:'vec2',  default:[0.5, 0.5]},
@@ -1115,6 +1178,7 @@ float ${sn} = sin(${a});`,
   /* ---- patterns ---- */
   simplex: {
     category:'Pattern', title:'Simplex Noise', desc:'3D simplex noise',
+    info:'Quilez-style 3D simplex noise — smoother and faster than classic Perlin. Output is roughly in [-1, 1]. The `z` input lets you slide through the noise field over time (feed Time) or use it as a \'seed\' axis. The base building block for everything organic — pair with FBM for fractal detail or feed into Palette for colorful fields.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'z', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     helpers:['snoise'],
@@ -1124,6 +1188,7 @@ float ${sn} = sin(${a});`,
   },
   fbm: {
     category:'Pattern', title:'FBM', desc:'fractal Brownian motion',
+    info:'Fractal Brownian motion — sums multiple octaves of simplex noise at doubling frequencies, giving the classic cloudy / organic look. More octaves = more detail (and more cost). Output range is roughly [-1, 1] and biased toward 0. The standard \'natural texture\' generator.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'z', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     params:[{name:'octaves', kind:'number', default:6, min:1, max:8, step:1}],
@@ -1134,6 +1199,7 @@ float ${sn} = sin(${a});`,
   },
   marble: {
     category:'Pattern', title:'Marble Pattern', desc:'warped FBM + veins',
+    info:'Warped FBM threaded with periodic veins — looks like polished marble or oil stains. The `scale` parameter controls the macro pattern size. Plug Time into the time input for slow undulating animation. Pair with Mix to drag two colors through the vein field for the classic marble look.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
     outputs:[{name:'pattern', type:'float'}],
     params:[{name:'scale', kind:'number', default:2.0, min:0.1, max:10, step:0.05}],
@@ -1144,6 +1210,7 @@ float ${sn} = sin(${a});`,
   },
   veins: {
     category:'Pattern', title:'Veins', desc:'sharp abs(sin) veins',
+    info:'Sharp \'crackled\' veins via `pow(abs(snoise(p*freq, t)), sharpness)`. Higher sharpness = thinner cracks. Use as a mask for veining, lightning, dry-soil cracks, or any \'thread of bright through dark\' effect.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     params:[
@@ -1161,6 +1228,7 @@ float ${sn} = sin(${a});`,
   },
   ridgedFbm: {
     category:'Pattern', title:'Ridged FBM', desc:'mountain-range noise — 1 − abs(fbm) per octave',
+    info:'Variant of FBM that does `1 - abs(noise)` per octave, producing crisp ridge lines instead of smooth blobs — the classic \'mountain range\' look. Output is roughly in [0, 1]. Great for terrain, lava cracks, or any layered ridge pattern.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'z', type:'float', default:0}],
     outputs:[{name:'out', type:'float'}],
     params:[{name:'octaves', kind:'number', default:6, min:1, max:8, step:1}],
@@ -1171,6 +1239,7 @@ float ${sn} = sin(${a});`,
   },
   checkerboard: {
     category:'Pattern', title:'Checkerboard', desc:'black/white checker grid',
+    info:'Hard 0/1 checker grid: `mod(floor(x) + floor(y), 2)`. Use as a debug pattern to visualize UV mapping, as a mask for periodic effects, or as the basis for tile-based art.',
     inputs:[
       {name:'uv',    type:'vec2',  default:[0, 0]},
       {name:'cells', type:'float', default:8},
@@ -1186,6 +1255,7 @@ float ${sn} = sin(${a});`,
   },
   stripes: {
     category:'Pattern', title:'Stripes', desc:'parallel stripes at an angle',
+    info:'Parallel stripes at a given angle and frequency. Produces a 0/1 mask via smoothstep. Stack two perpendicular Stripes (multiplied) for plaid; rotate via the angle parameter for diagonals.',
     inputs:[
       {name:'uv',        type:'vec2',  default:[0, 0]},
       {name:'angle',     type:'float', default:0},
@@ -1210,6 +1280,7 @@ float ${x} = ${c} * ${ctx.inputs.uv}.x + ${s} * ${ctx.inputs.uv}.y;`,
   },
   grid: {
     category:'Pattern', title:'Grid', desc:'thin lines at cell boundaries',
+    info:'Thin lines at every cell boundary of an N×N grid. Use as overlays (multiply with a base color), as a debug grid, or as a building block for tile-based effects.',
     inputs:[
       {name:'uv',        type:'vec2',  default:[0, 0]},
       {name:'cells',     type:'float', default:10},
@@ -1236,6 +1307,7 @@ float ${d} = min(${e}.x, ${e}.y);`,
   },
   sdfCircle: {
     category:'Pattern', title:'SDF Circle', desc:'signed distance to a circle (neg inside)',
+    info:'Signed distance to a circle: NEGATIVE inside the circle, ZERO at the boundary, POSITIVE outside. Combine with SDF Mask to render a filled disc, or with other SDFs (Union/Intersect/Subtract) for compound shapes. The atom of all 2D SDF compositing.',
     inputs:[
       {name:'p',      type:'vec2',  default:[0, 0]},
       {name:'center', type:'vec2',  default:[0, 0]},
@@ -1251,6 +1323,7 @@ float ${d} = min(${e}.x, ${e}.y);`,
   },
   sdfBox: {
     category:'Pattern', title:'SDF Box', desc:'signed distance to an axis-aligned box',
+    info:'Signed distance to an axis-aligned box. Negative inside, zero at edges, positive outside. Pair with SDF Mask for a filled rectangle, or rotate the input UV first for tilted boxes.',
     inputs:[
       {name:'p',      type:'vec2',  default:[0, 0]},
       {name:'center', type:'vec2',  default:[0, 0]},
@@ -1272,6 +1345,7 @@ float ${d} = min(${e}.x, ${e}.y);`,
   },
   sdfHexagon: {
     category:'Pattern', title:'SDF Hexagon', desc:'signed distance to a flat-top hexagon',
+    info:'Signed distance to a flat-top regular hexagon centered at origin. Use for honeycomb tiling (kaleidoscope first for arrays), badge-shaped masks, or hexagonal pattern bases.',
     inputs:[
       {name:'p',      type:'vec2',  default:[0, 0]},
       {name:'center', type:'vec2',  default:[0, 0]},
@@ -1285,6 +1359,7 @@ float ${d} = min(${e}.x, ${e}.y);`,
   },
   sdfTriangle: {
     category:'Pattern', title:'SDF Triangle', desc:'signed distance to an equilateral triangle',
+    info:'Signed distance to an equilateral triangle. Same compositing rules as the other SDFs — Mask for fill, Union/Intersect for compound shapes.',
     inputs:[
       {name:'p',      type:'vec2',  default:[0, 0]},
       {name:'center', type:'vec2',  default:[0, 0]},
@@ -1300,6 +1375,7 @@ float ${d} = min(${e}.x, ${e}.y);`,
   },
   sdfCrystal: {
     category:'Pattern', title:'SDF Crystal', desc:'convex pentagon crystal silhouette',
+    info:'Convex pentagonal crystal silhouette as an SDF. Useful for gem icons, badge shapes, or as a base for iridescent-crystal renders (combine with Iridescence on the SDF Normal output).',
     inputs:[
       {name:'p',      type:'vec2',  default:[0, 0]},
       {name:'center', type:'vec2',  default:[0, 0]},
@@ -1316,6 +1392,7 @@ float ${d} = min(${e}.x, ${e}.y);`,
   },
   sdfUnion: {
     category:'Pattern', title:'SDF Union', desc:'combine two SDFs — min(a, b), optionally smoothed',
+    info:'Combines two SDFs into one shape that includes BOTH: `min(a, b)`. With `smoothness > 0` the join is smoothly blended (a metaball-like blob). Set smoothness=0 for hard intersections.',
     inputs:[
       {name:'a',      type:'float', default:1.0},
       {name:'b',      type:'float', default:1.0},
@@ -1340,6 +1417,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   sdfIntersect: {
     category:'Pattern', title:'SDF Intersect', desc:'overlap of two SDFs — max(a, b)',
+    info:'Keeps only the OVERLAP of two SDFs: `max(a, b)`. Use to clip one shape by another — e.g., \'a star but only where it intersects a circle\'.',
     inputs:[
       {name:'a', type:'float', default:1.0},
       {name:'b', type:'float', default:1.0},
@@ -1351,6 +1429,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   sdfSubtract: {
     category:'Pattern', title:'SDF Subtract', desc:'cut b out of a — max(a, -b)',
+    info:'Cuts shape b out of shape a: `max(a, -b)`. Use to punch holes, carve notches, or make ring-like shapes (subtract a smaller circle from a larger one).',
     inputs:[
       {name:'a', type:'float', default:1.0},
       {name:'b', type:'float', default:1.0},
@@ -1363,6 +1442,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   sdfMask: {
     category:'Pattern', title:'SDF Mask', desc:'SDF → 0/1 filled mask with soft edge',
+    info:'Converts a signed distance field into a 0/1 filled mask, with a soft anti-aliased edge whose width you control. The bridge between geometry-style SDF math and standard mask-driven coloring.',
     inputs:[
       {name:'sd',   type:'float', default:1.0},
       {name:'edge', type:'float', default:0.005},
@@ -1377,6 +1457,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   sdfNormal: {
     category:'Pattern', title:'SDF Normal', desc:'fake 3D normal from an SDF (bulging surface)',
+    info:'Fakes a 3D normal from a 2D SDF by treating it like a height field — the result bulges outward from the SDF interior. Combined with Lambert/Fresnel/Iridescence gives the SDF a glassy, lit appearance.',
     inputs:[
       {name:'sd',    type:'float', default:1.0},
       {name:'bulge', type:'float', default:0.7},
@@ -1394,6 +1475,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   voronoi: {
     category:'Pattern', title:'Voronoi', desc:'cellular noise — distance + cell-id',
+    info:'Cellular noise: divides space into Voronoi cells around random seed points. `dist` is the distance from the cell center (0 at center, ~1 near boundaries — great for crack patterns). `id` is a stable per-cell random in [0, 1) — feed into Palette for stained-glass / gem looks. The `scale` parameter is meant to be CONSTANT — feeding a varying signal into it collapses the sampling at any pixel where scale ≈ 0.',
     inputs:[
       {name:'p',     type:'vec2',  default:[0, 0]},
       {name:'scale', type:'float', default:5},
@@ -1424,6 +1506,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
      (rgb → color math, r → heightfield / mask, a → transparency cutoff). */
   texture: {
     category:'Pattern', title:'Texture', desc:'sample an image — rgb / r / a',
+    info:'Samples an image. The full RGB, just the R channel, and the alpha are exposed as separate outputs so downstream nodes can pick whichever they need without re-sampling.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}],
     outputs:[
       {name:'rgb', type:'vec3'},
@@ -1445,6 +1528,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   heightMap: {
     category:'Pattern', title:'Height Map', desc:'procedural FBM or static image',
+    info:'Either a procedural FBM-based heightmap (mode=\'dynamic\') or a static image\'s R channel (mode=\'static\'). Use as the height field for Normal Map, Shadow, and Shadow Tex nodes to derive surface lighting from a heightfield.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
     outputs:[{name:'height', type:'float'}],
     params:[
@@ -1477,6 +1561,7 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
   },
   normalMap: {
     category:'Pattern', title:'Normal Map', desc:'procedural derivatives or static image',
+    info:'Generates a tangent-space normal map. In dynamic mode, derives normals from procedural FBM via finite differences. In static mode, samples a normal-map image (assumes standard blue-purple encoding). Plug into Lambert as N for surface lighting.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
     outputs:[{name:'normal', type:'vec3'}],
     params:[
@@ -1529,6 +1614,7 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
   /* ---- effects ---- */
   posterize: {
     category:'Effect', title:'Posterize', desc:'quantize each color channel to N levels',
+    info:'Quantizes each channel of a vec3 color to N discrete levels: `floor(c * levels) / levels`. Low levels (3-5) = cel-shaded / screen-print look; higher (16-32) = subtle gradient banding. The vec3 sibling of Posterize (Float).',
     inputs:[
       {name:'color',  type:'vec3',  default:[0, 0, 0]},
       {name:'levels', type:'float', default:4},
@@ -1543,6 +1629,7 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
   },
   threshold: {
     category:'Effect', title:'Threshold', desc:'keep colors brighter than cutoff (bloom prep)',
+    info:'Keeps only pixels brighter than `cutoff` (luminance-weighted), with a soft `softness` ramp. Standard first half of a bloom pipeline — combine with Soft Glow / HDR Boost to spread and boost the bright spots.',
     inputs:[
       {name:'color',    type:'vec3',  default:[0, 0, 0]},
       {name:'cutoff',   type:'float', default:0.6},
@@ -1565,6 +1652,7 @@ float ${mask} = smoothstep(${ctx.inputs.cutoff}, ${ctx.inputs.cutoff} + ${ctx.in
   },
   contrast: {
     category:'Effect', title:'Contrast', desc:'adjust color contrast around a midpoint',
+    info:'Pushes colors away from (contrast > 1) or toward (contrast < 1) a midpoint. `out = (color - midpoint) * contrast + midpoint`. Use to make muddy mid-tones pop or to flatten an over-bright image.',
     inputs:[
       {name:'color',    type:'vec3',  default:[0.5, 0.5, 0.5]},
       {name:'contrast', type:'float', default:1.2},
@@ -1577,6 +1665,7 @@ float ${mask} = smoothstep(${ctx.inputs.cutoff}, ${ctx.inputs.cutoff} + ${ctx.in
   },
   softGlow: {
     category:'Effect', title:'Soft Glow', desc:'radial glow from a point — gaussian falloff',
+    info:'Radial gaussian glow centered at a point. Outputs a colored halo that falls off smoothly with distance. Use for warm light sources, mouse glows, or as a building block for bloom.',
     inputs:[
       {name:'pos',    type:'vec2',  default:[0.5, 0.5]},
       {name:'center', type:'vec2',  default:[0.5, 0.5]},
@@ -1603,6 +1692,7 @@ float ${i} = exp(-(${d} * ${d}) / max(${ctx.inputs.radius} * ${ctx.inputs.radius
   },
   starburst: {
     category:'Effect', title:'Starburst', desc:'N-point star rays from a center (lens-flare)',
+    info:'N-pointed starburst centered at a point — angular sin pattern combined with radial falloff. Use for lens flares, light glints, or starlight badges. Increase `points` for more rays, `sharpness` for thinner rays.',
     inputs:[
       {name:'pos',       type:'vec2',  default:[0.5, 0.5]},
       {name:'center',    type:'vec2',  default:[0.5, 0.5]},
@@ -1635,6 +1725,7 @@ float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpn
   },
   hdrBoost: {
     category:'Effect', title:'HDR Boost', desc:'exposure (in stops) + gamma tonemap',
+    info:'Tonemapping pass: applies exposure (in stops, like a camera) then gamma correction. Use to push intentionally over-bright content (post-bloom, post-glow) into a properly-mapped 0..1 range.',
     inputs:[
       {name:'color',    type:'vec3',  default:[0, 0, 0]},
       {name:'exposure', type:'float', default:0.5},   // EV stops: 0 = no change, +1 = 2× brighter
@@ -1658,6 +1749,7 @@ float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpn
   },
   sheenLines: {
     category:'Effect', title:'Sheen Lines', desc:'thin moving streaks of light (glass/sheen)',
+    info:'Thin moving streaks of light — the diagonal sheen you see on glass, satin, or polished metal. Use as a multiplied overlay on a base color to add a \'glossy\' feel.',
     inputs:[
       {name:'uv',        type:'vec2',  default:[0, 0]},
       {name:'time',      type:'float', default:0},
@@ -1692,6 +1784,7 @@ float ${d} = abs(${f} - 0.5);`,
   },
   viewMask: {
     category:'Effect', title:'View Mask', desc:'visibility based on view rotation / cursor offset',
+    info:'Visibility based on view-rotation or cursor offset. Use to hide / reveal parts of a scene as the user moves the cursor, or to create directional reveal effects.',
     inputs:[
       {name:'offset',    type:'vec2',  default:[0, 0]},   // cursor offset from centre
       {name:'threshold', type:'float', default:0.05},     // distance below which "near" is fully on
@@ -1722,6 +1815,7 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
   },
   shadowTex: {
     category:'Effect', title:'Shadow Tex', desc:'soft raycast shadow using a height-map texture (with sample blur)',
+    info:'Soft raycast shadow that uses a sampled height-map TEXTURE as the heightfield (so shadows match a real image\'s geometry). Includes per-instance sample blur to reduce raymarch noise. Use when your scene is built around a static texture and you want the shadows to align with that texture\'s features.',
     inputs:[
       {name:'pos',      type:'vec2', default:[0, 0]},
       {name:'lightDir', type:'vec3', default:[0, 0, 1]},
@@ -1860,6 +1954,7 @@ float ${fnName}(vec2 startPos, vec3 lightDir) {
   },
   shadow: {
     category:'Effect', title:'Shadow', desc:'soft raycast heightfield shadow factor (0=shadowed, 1=lit)',
+    info:'Soft raycast shadow factor (0 = fully shadowed, 1 = lit) using a procedural FBM heightfield. Feed Sim Light or Light Dir as the light direction. Multiply the result into your final color to bake in shadows without doing real geometry.',
     inputs:[
       {name:'pos',      type:'vec2',  default:[0, 0]},
       {name:'lightDir', type:'vec3',  default:[0, 0, 1]},
@@ -1929,6 +2024,7 @@ if (u_shadows > 0.5) {
   },
   lambert: {
     category:'Effect', title:'Lambert', desc:'diffuse lighting: max(N·L, 0)',
+    info:'Classic diffuse lighting: `mix(ambient, 1.0, max(N·L, 0))`. Returns 1 when the surface faces the light, ambient when it faces away. Multiply into a base color for surface-aware shading. Feed N from World Normal or Normal Map, and L from Sim Light or Light Dir.',
     inputs:[
       {name:'normal',   type:'vec3', default:[0, 0, 1]},
       {name:'lightDir', type:'vec3', default:[0.4, 0.6, 1.0]},
@@ -1948,6 +2044,7 @@ if (u_shadows > 0.5) {
   },
   fresnel: {
     category:'Effect', title:'Fresnel', desc:'edge-glow factor: pow(1 − |N·V|, power)',
+    info:'Edge-glow factor: `pow(1 - |N·V|, power)`. Approaches 1 at grazing angles (edges of curved surfaces) and 0 facing the camera. The basis of rim lights, glass edge highlights, and any \'glow at silhouettes\' effect.',
     inputs:[
       {name:'normal', type:'vec3',  default:[0, 0, 1]},
       {name:'view',   type:'vec3',  default:[0, 0, 1]},
@@ -1968,6 +2065,7 @@ if (u_shadows > 0.5) {
   },
   iridescence: {
     category:'Effect', title:'Iridescence', desc:'angle-shifting rainbow (oil/soap/crystal)',
+    info:'Angle-shifting rainbow color, like soap bubbles or oil slicks. Uses N·V to compute the local viewing angle and maps it through a palette. Pair with SDF Normal or actual surface normals for crystal/gem looks.',
     inputs:[
       {name:'normal', type:'vec3',  default:[0, 0, 1]},
       {name:'freq',   type:'float', default:4.0},   // number of rainbow cycles as angle sweeps 0→1
@@ -1993,6 +2091,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
   },
   vignette: {
     category:'Effect', title:'Vignette', desc:'darken edges',
+    info:'Darkens the corners of a UV-space color, leaving the center unchanged — the classic photographic vignette. Use as the LAST step before output for a focused / cinematic feel. Strength 0 = no effect, 1+ = strong darkening.',
     inputs:[
       {name:'color', type:'vec3', default:[0,0,0]},
       {name:'uv', type:'vec2', default:[0.5, 0.5]},
@@ -2009,6 +2108,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
   },
   mouseGlow: {
     category:'Effect', title:'Mouse Glow', desc:'warm halo at cursor',
+    info:'A warm glowing halo locked to the cursor position. Composited additively, so wire it as a downstream effect on top of your base color.',
     inputs:[
       {name:'uv', type:'vec2', default:[0.5, 0.5]},
       {name:'color', type:'vec3', default:[1,1,1]},
@@ -2040,6 +2140,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
      so `amount` acts like a layer opacity slider. */
   blend: {
     category:'Effect', title:'Blend', desc:'combine two colors (10 modes)',
+    info:'Combines two vec3 colors via one of 10 standard blend modes (multiply, screen, overlay, soft-light, color-dodge, etc.) with an `amount` parameter for partial blending. The vec3 sibling of Mix — use whenever you want compositing-style operations rather than straight lerp.',
     inputs:[
       {name:'a',      type:'vec3',  default:[0,0,0]},  // base
       {name:'b',      type:'vec3',  default:[1,1,1]},  // top
@@ -2093,6 +2194,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
   /* ---- layered material compositor ---- */
   layerStack: {
     category:'Module', title:'Layer Stack', desc:'composite N material layers with per-layer blend mode + opacity',
+    info:'Composites N material layers in order, each with its own blend mode and opacity. The shader-graph equivalent of Photoshop / Procreate layer stacks. Add layers via the per-row controls; reorder by the slot index.',
     // Dynamic schema: 1 base input + numLayers layer inputs. Output is a
     // single composited vec3. Per-layer opacity (0..1) and blend mode are
     // params edited inline on the node body.
@@ -2148,6 +2250,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
   /* ---- patch bay / debug routing ---- */
   flag: {
     category:'Module', title:'Flag', desc:'patch bay — internally wire inputs to outputs, toggle each',
+    info:'A patch bay / debug router. Internally wires inputs to outputs with per-input and per-output toggle checkboxes — flip them on/off to A/B test connections without re-wiring the whole graph. The combined output is the SUM of all enabled inputs wired to that output.',
     // Dynamic schema: the input / output socket lists are derived from the
     // `numInputs` / `numOutputs` params at render + compile time. See
     // getNodeInputs / getNodeOutputs in graph-state.js and the editor's
@@ -2204,6 +2307,7 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
   /* ---- terminal ---- */
   output: {
     category:'Output', title:'Fragment Output', desc:'gl_FragColor + specular-driven bloom',
+    info:'The final fragment shader output. Writes gl_FragColor and (optionally) routes the result through a multi-pass bloom pipeline. The `specular` input becomes the alpha channel and gates per-pixel bloom — wire a Fresnel or spec map there to make only shiny areas glow.',
     // `specular` is a per-pixel reflectivity mask (0 = matte, 1 = mirror).
     // The renderer writes it into the scene FBO's alpha channel, and the
     // bloom pass uses it to decide which pixels glow — so a Fresnel / spec
