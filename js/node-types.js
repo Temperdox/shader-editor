@@ -1644,7 +1644,7 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
     },
   },
   shadowTex: {
-    category:'Effect', title:'Shadow Tex', desc:'raycast shadow using a height-map texture (aligns with the source map)',
+    category:'Effect', title:'Shadow Tex', desc:'soft raycast shadow using a height-map texture',
     inputs:[
       {name:'pos',      type:'vec2', default:[0, 0]},
       {name:'lightDir', type:'vec3', default:[0, 0, 1]},
@@ -1655,26 +1655,39 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
       {name:'invert',      kind:'segmented', default:'no', options:['no', 'yes']},
       {name:'heightScale', kind:'number',    default:0.06, min:0,    max:0.5, step:0.005},
       {name:'maxDist',     kind:'number',    default:0.12, min:0.01, max:1,   step:0.01},
+      {name:'sharpness',   kind:'number',    default:16,   min:1,    max:128, step:1},
       {name:'darkness',    kind:'number',    default:0.45, min:0,    max:1,   step:0.05},
     ],
-    // Like the procedural Shadow node but the height field comes from a
-    // texture sample, so cast shadows align with the SAME details that
-    // any other Texture node sees. Ideal for texture-driven materials
-    // (bricks, fabric, terrain photography). Sampled with fract() so the
-    // image tiles outside [0,1]. `invert: yes` flips the height
-    // interpretation (use it when dark = high in your map).
+    // SOFT shadow ray-march via IQ's classic accumulator: instead of a hard
+    // binary "blocked or not" test (which produces stair-stepped shadow
+    // edges that look pixelated), we track the SMALLEST `sharpness *
+    // clearance / distance` ratio across the march. As the ray slips closer
+    // to an occluder without being fully blocked, the running min drops
+    // continuously, producing a smooth penumbra. Lower `sharpness` = wider
+    // soft band; higher = tighter / harder shadows. Final factor is mapped
+    // through mix(darkness, 1.0, occ) so the shadowed value floors at the
+    // user's `darkness` instead of going pitch black.
+    //
+    // 24 march steps (was 12) for noticeably smoother results — the per-
+    // step cost is one texture sample, still cheap.
+    //
+    // Sampled with fract() so the image tiles outside [0,1]. `invert: yes`
+    // flips the height interpretation (dark = high).
     generate:(ctx) => {
       const uName = glslUniformName(ctx.node.id, 'sh');
       const result = ctx.tmp('shtR');
+      const occ    = ctx.tmp('shtO');
       const startH = ctx.tmp('shtH0');
       const lxy    = ctx.tmp('shtL');
       const tt     = ctx.tmp('shtT');
       const xy     = ctx.tmp('shtXy');
       const rh     = ctx.tmp('shtRh');
       const gh     = ctx.tmp('shtGh');
+      const dh     = ctx.tmp('shtDh');
       const hs = glslNum(ctx.params.heightScale);
       const md = glslNum(ctx.params.maxDist);
       const dk = glslNum(ctx.params.darkness);
+      const sk = glslNum(ctx.params.sharpness);
       const invPrefix = ctx.params.invert === 'yes' ? '(1.0 - ' : '(';
       const invSuffix = ctx.params.invert === 'yes' ? ')'        : ')';
       return {
@@ -1684,14 +1697,18 @@ if (u_shadows > 0.5) {
   float ${startH} = ${invPrefix}texture2D(${uName}, fract(${ctx.inputs.pos}))${invSuffix}.r * ${hs};
   float ${lxy} = length(${ctx.inputs.lightDir}.xy);
   if (${lxy} > 0.001) {
-    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh};
-    for (int _shti = 1; _shti <= 14; _shti++) {
-      ${tt} = (float(_shti) / 14.0) * ${md};
+    float ${occ} = 1.0;
+    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh}; float ${dh};
+    for (int _shti = 1; _shti <= 24; _shti++) {
+      ${tt} = (float(_shti) / 24.0) * ${md};
       ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
       ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
       ${gh} = ${invPrefix}texture2D(${uName}, fract(${xy}))${invSuffix}.r * ${hs};
-      if (${gh} > ${rh}) { ${result} = ${dk}; break; }
+      ${dh} = ${rh} - ${gh};
+      if (${dh} < 0.0) { ${occ} = 0.0; break; }
+      ${occ} = min(${occ}, ${sk} * ${dh} / ${tt});
     }
+    ${result} = mix(${dk}, 1.0, clamp(${occ}, 0.0, 1.0));
   }
 }`,
         exprs:{ out: result },
@@ -1700,7 +1717,7 @@ if (u_shadows > 0.5) {
     },
   },
   shadow: {
-    category:'Effect', title:'Shadow', desc:'raycast heightfield shadow factor (0=shadowed, 1=lit)',
+    category:'Effect', title:'Shadow', desc:'soft raycast heightfield shadow factor (0=shadowed, 1=lit)',
     inputs:[
       {name:'pos',      type:'vec2',  default:[0, 0]},
       {name:'lightDir', type:'vec3',  default:[0, 0, 1]},
@@ -1708,30 +1725,33 @@ if (u_shadows > 0.5) {
     ],
     outputs:[{name:'out', type:'float'}],
     params:[
-      {name:'scale',    kind:'number', default:2.5,  min:0.1, max:20,  step:0.1},
-      {name:'maxDist',  kind:'number', default:0.4,  min:0.05, max:2,  step:0.05},
-      {name:'darkness', kind:'number', default:0.35, min:0,    max:1,  step:0.05},
+      {name:'scale',     kind:'number', default:2.5,  min:0.1,  max:20,  step:0.1},
+      {name:'maxDist',   kind:'number', default:0.4,  min:0.05, max:2,   step:0.05},
+      {name:'sharpness', kind:'number', default:16,   min:1,    max:128, step:1},
+      {name:'darkness',  kind:'number', default:0.35, min:0,    max:1,   step:0.05},
     ],
     helpers:['snoise', 'fbm', 'heightField'],
-    // Raymarches the SAME heightField helper that Normal Map (dynamic) uses,
-    // so shadows match procedural FBM bumps perfectly when you give both
-    // nodes the same `scale`. Each fragment walks `maxDist` along the
-    // light direction projected onto the surface, sampling the height at
-    // each step. If any sample sits above the ray's expected height at
-    // that distance, the fragment is shadowed → returns `darkness` (0=full
-    // shadow, default 0.35 = 65% darker). Skipped entirely when the
-    // Shadows button is off (u_shadows < 0.5) — returns 1.0.
-    extensions:[],   // no derivatives needed
+    // SOFT shadow ray-march via IQ's classic accumulator (same algorithm
+    // as Shadow Tex, but the height field is the procedural FBM
+    // `heightField` helper — same one Normal Map (dynamic) uses). Tracks
+    // the smallest `sharpness * clearance / distance` ratio across the
+    // march to produce a continuous penumbra instead of a pixelated hard
+    // edge. Lower sharpness = softer/wider penumbra. 24 march steps for
+    // smoothness. When the Shadows button is off (u_shadows < 0.5) the
+    // node returns 1.0 immediately — zero march cost.
     generate:(ctx) => {
       const result = ctx.tmp('shRes');
+      const occ    = ctx.tmp('shOcc');
       const startH = ctx.tmp('shH0');
       const lxy    = ctx.tmp('shLxy');
       const tt     = ctx.tmp('shT');
       const xy     = ctx.tmp('shXy');
       const rh     = ctx.tmp('shRh');
       const gh     = ctx.tmp('shGh');
+      const dh     = ctx.tmp('shDh');
       const sc = glslNum(ctx.params.scale);
       const md = glslNum(ctx.params.maxDist);
+      const sk = glslNum(ctx.params.sharpness);
       const dk = glslNum(ctx.params.darkness);
       return {
         setup:
@@ -1740,16 +1760,18 @@ if (u_shadows > 0.5) {
   float ${startH} = heightField(${ctx.inputs.pos}, ${sc}, ${ctx.inputs.time});
   float ${lxy} = length(${ctx.inputs.lightDir}.xy);
   if (${lxy} > 0.001) {
-    // Single declarations outside the loop — GLSL ES 1.00 disallows
-    // re-declaring a name in inner scopes on some drivers.
-    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh};
-    for (int _shi = 1; _shi <= 12; _shi++) {
-      ${tt} = (float(_shi) / 12.0) * ${md};
+    float ${occ} = 1.0;
+    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh}; float ${dh};
+    for (int _shi = 1; _shi <= 24; _shi++) {
+      ${tt} = (float(_shi) / 24.0) * ${md};
       ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
       ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
       ${gh} = heightField(${xy}, ${sc}, ${ctx.inputs.time});
-      if (${gh} > ${rh}) { ${result} = ${dk}; break; }
+      ${dh} = ${rh} - ${gh};
+      if (${dh} < 0.0) { ${occ} = 0.0; break; }
+      ${occ} = min(${occ}, ${sk} * ${dh} / ${tt});
     }
+    ${result} = mix(${dk}, 1.0, clamp(${occ}, 0.0, 1.0));
   }
 }`,
         exprs:{ out: result },
