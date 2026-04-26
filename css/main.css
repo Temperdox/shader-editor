@@ -1380,3 +1380,27 @@ svg.flag-wires path.flag-wire.preview{
 }
 .sv-max-toggle input{ accent-color:#b9a5ff }
 .sv-max-toggle input:checked + span{ color:#ffd6a5 }
+
+.sv-duration-input{
+  width:100px;
+  padding:8px 12px;
+  font-family:'JetBrains Mono', ui-monospace, monospace;
+  font-size:12px;
+  color:var(--ink);
+  background:rgba(0,0,0,.35);
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:8px;
+  outline:none;
+}
+.sv-duration-input:focus{ border-color:rgba(185,165,255,.55) }
+.sv-duration-suffix{
+  font-size:10.5px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--ink-dim);
+}
+.sv-duration-suffix em{
+  font-style:normal;
+  text-transform:none;
+  letter-spacing:.05em;
+  color:var(--ink-faint);
+  margin-left:4px;
+}

@@ -230,6 +230,25 @@
           <button class="sv-preset active" data-fps="60" type="button">60</button>
           <button class="sv-preset" data-fps="120" type="button">120</button>
         </div>
+
+        <div class="sv-row-label">
+          <span>Duration</span>
+          <span class="sv-bitrate-readout" id="svDurationReadout">Manual stop</span>
+        </div>
+        <div class="sv-bitrate-row">
+          <input class="sv-duration-input" id="svDuration" type="number" min="0" step="1" value="0" />
+          <span class="sv-duration-suffix">sec  <em>(0 = manual stop)</em></span>
+        </div>
+        <div class="sv-presets sv-duration-presets" id="svDurationPresets">
+          <button class="sv-preset active" data-dur="0"   type="button">Manual</button>
+          <button class="sv-preset" data-dur="5"   type="button">5s</button>
+          <button class="sv-preset" data-dur="10"  type="button">10s</button>
+          <button class="sv-preset" data-dur="15"  type="button">15s</button>
+          <button class="sv-preset" data-dur="30"  type="button">30s</button>
+          <button class="sv-preset" data-dur="60"  type="button">1m</button>
+          <button class="sv-preset" data-dur="120" type="button">2m</button>
+          <button class="sv-preset" data-dur="300" type="button">5m</button>
+        </div>
       </div>
     </div>
   </div>

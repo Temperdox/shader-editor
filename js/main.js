@@ -120,6 +120,9 @@ $('#shadowsBtn').addEventListener('click', () => {
   const arBtns    = modal ? [...modal.querySelectorAll('[data-ar]')] : [];
   const brBtns    = modal ? [...modal.querySelectorAll('[data-br]')] : [];
   const fpsBtns   = modal ? [...modal.querySelectorAll('[data-fps]')] : [];
+  const durBtns   = modal ? [...modal.querySelectorAll('[data-dur]')] : [];
+  const durInput  = $('#svDuration');
+  const durRead   = $('#svDurationReadout');
 
   // ---- recording state ----
   let recorder        = null;
@@ -134,6 +137,8 @@ $('#shadowsBtn').addEventListener('click', () => {
   let recordCtx       = null;
   let chosenFilename  = '';
   let chosenFps       = 60;
+  let chosenDuration  = 0;       // seconds; 0 = manual stop
+  let autoStopId      = null;
   let cropNorm        = { x:0, y:0, w:1, h:1 };
 
   // codecs in the dropdown — only those actually supported are shown.
@@ -298,6 +303,23 @@ $('#shadowsBtn').addEventListener('click', () => {
     }
   }
 
+  function fmtDur(sec){
+    sec = Math.max(0, Math.floor(sec));
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  }
+  function updateDurationUI(){
+    if (!durInput || !durRead) return;
+    const v = Math.max(0, parseInt(durInput.value, 10) || 0);
+    if (v === 0){
+      durRead.textContent = 'Manual stop';
+    } else {
+      durRead.textContent = `Auto-stop ${fmtDur(v)}`;
+    }
+    setActive(durBtns, b => +b.dataset.dur === v);
+  }
+
   function openModal(){
     if (!modal) return;
     populateCodecs();
@@ -309,6 +331,8 @@ $('#shadowsBtn').addEventListener('click', () => {
     updateBitrateUI();
     setActive(brBtns, b => +b.dataset.br === 16);
     setActive(fpsBtns, b => +b.dataset.fps === chosenFps);
+    if (durInput) durInput.value = chosenDuration;
+    updateDurationUI();
 
     modal.classList.add('open');
     back.classList.add('open');
@@ -353,6 +377,7 @@ $('#shadowsBtn').addEventListener('click', () => {
 
     chosenFilename = ((filenameI && filenameI.value.trim()) || defaultFilename())
       .replace(/[\\/:*?"<>|]/g, '_');
+    chosenDuration = durInput ? Math.max(0, parseInt(durInput.value, 10) || 0) : 0;
     chunks = [];
 
     const isFull = cropNorm.x === 0 && cropNorm.y === 0
@@ -425,13 +450,15 @@ $('#shadowsBtn').addEventListener('click', () => {
     recorder.start(250);
     btn.classList.add('recording');
     startTs = performance.now();
-    if (label) label.textContent = 'STOP 0:00';
+    const totalStr = chosenDuration > 0 ? ` / ${fmtDur(chosenDuration)}` : '';
+    if (label) label.textContent = `STOP 0:00${totalStr}`;
     timerId = setInterval(() => {
-      const elapsed = Math.floor((performance.now() - startTs) / 1000);
-      const m = Math.floor(elapsed / 60);
-      const s = elapsed % 60;
-      if (label) label.textContent = `STOP ${m}:${String(s).padStart(2, '0')}`;
+      const elapsedSec = Math.floor((performance.now() - startTs) / 1000);
+      if (label) label.textContent = `STOP ${fmtDur(elapsedSec)}${totalStr}`;
     }, 250);
+    if (chosenDuration > 0){
+      autoStopId = setTimeout(stopRecording, chosenDuration * 1000);
+    }
   }
 
   function stopRecording(){
@@ -439,6 +466,7 @@ $('#shadowsBtn').addEventListener('click', () => {
     recorder.stop();
     btn.classList.remove('recording');
     if (timerId){ clearInterval(timerId); timerId = null; }
+    if (autoStopId){ clearTimeout(autoStopId); autoStopId = null; }
     if (label) label.textContent = 'Save Video';
   }
 
@@ -464,6 +492,11 @@ $('#shadowsBtn').addEventListener('click', () => {
       updateBitrateUI();
       if (brMax.checked) setActive(brBtns, () => false);
     });
+    durBtns.forEach(b => b.addEventListener('click', () => {
+      if (durInput) durInput.value = b.dataset.dur;
+      updateDurationUI();
+    }));
+    if (durInput) durInput.addEventListener('input', updateDurationUI);
     if (cropEl){
       cropEl.addEventListener('pointerdown', onPointerDown);
       [...cropEl.querySelectorAll('.sv-crop-handle')].forEach(h =>
