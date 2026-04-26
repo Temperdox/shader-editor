@@ -1644,7 +1644,7 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
     },
   },
   shadowTex: {
-    category:'Effect', title:'Shadow Tex', desc:'soft raycast shadow using a height-map texture',
+    category:'Effect', title:'Shadow Tex', desc:'soft raycast shadow using a height-map texture (with sample blur)',
     inputs:[
       {name:'pos',      type:'vec2', default:[0, 0]},
       {name:'lightDir', type:'vec3', default:[0, 0, 1]},
@@ -1653,26 +1653,34 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
     params:[
       {name:'imageUrl',    kind:'image',     default:''},
       {name:'invert',      kind:'segmented', default:'no', options:['no', 'yes']},
-      {name:'heightScale', kind:'number',    default:0.06, min:0,    max:0.5, step:0.005},
-      {name:'maxDist',     kind:'number',    default:0.12, min:0.01, max:1,   step:0.01},
-      {name:'sharpness',   kind:'number',    default:16,   min:1,    max:128, step:1},
-      {name:'darkness',    kind:'number',    default:0.45, min:0,    max:1,   step:0.05},
+      {name:'heightScale', kind:'number',    default:0.06,  min:0,    max:0.5,  step:0.005},
+      {name:'maxDist',     kind:'number',    default:0.12,  min:0.01, max:1,    step:0.01},
+      {name:'sharpness',   kind:'number',    default:16,    min:1,    max:128,  step:1},
+      // 5-tap cross-pattern blur radius (UV units). Smooths out per-pixel
+      // noise in the height map (e.g. brick face texture) so shadow edges
+      // aren't speckled. 0 = no blur (one sample); ~0.003–0.006 = a few
+      // texels at typical 1024-px heightmaps.
+      {name:'blurRadius',  kind:'number',    default:0.004, min:0,    max:0.02, step:0.0005},
+      // Distance-based fade-out: the per-step occlusion is lerped toward
+      // "fully lit" as `t` approaches maxDist. `fadeStart` is the fraction
+      // of maxDist at which the fade begins. Lower = longer soft tail
+      // (shadows fade earlier); 1.0 = hard cutoff at maxDist (old behaviour).
+      {name:'fadeStart',   kind:'number',    default:0.5,   min:0,    max:1,    step:0.05},
+      {name:'darkness',    kind:'number',    default:0.45,  min:0,    max:1,    step:0.05},
     ],
-    // SOFT shadow ray-march via IQ's classic accumulator: instead of a hard
-    // binary "blocked or not" test (which produces stair-stepped shadow
-    // edges that look pixelated), we track the SMALLEST `sharpness *
-    // clearance / distance` ratio across the march. As the ray slips closer
-    // to an occluder without being fully blocked, the running min drops
-    // continuously, producing a smooth penumbra. Lower `sharpness` = wider
-    // soft band; higher = tighter / harder shadows. Final factor is mapped
-    // through mix(darkness, 1.0, occ) so the shadowed value floors at the
-    // user's `darkness` instead of going pitch black.
+    // SOFT shadow ray-march via IQ's classic accumulator + per-sample BLUR.
+    // The accumulator (`min(sharpness * clearance / distance)`) gives a
+    // continuous penumbra instead of a hard yes/no occlusion. The 5-tap
+    // cross-pattern blur (`blurRadius` in UV units) low-pass filters the
+    // height-map sample so per-pixel noise in the source texture (brick
+    // face speckle, JPEG artifacts) doesn't bleed through into the shadow
+    // factor. Together they produce smooth, continuous shadow edges
+    // instead of the stair-stepped/Rorschach look you get from a binary
+    // single-tap march.
     //
-    // 24 march steps (was 12) for noticeably smoother results — the per-
-    // step cost is one texture sample, still cheap.
-    //
-    // Sampled with fract() so the image tiles outside [0,1]. `invert: yes`
-    // flips the height interpretation (dark = high).
+    // Cost: 24 march steps × 5 texture samples per step + 5 for the start
+    // height = 125 samples per pixel. Still well within budget for typical
+    // fullscreen shaders.
     generate:(ctx) => {
       const uName = glslUniformName(ctx.node.id, 'sh');
       const result = ctx.tmp('shtR');
@@ -1684,29 +1692,51 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
       const rh     = ctx.tmp('shtRh');
       const gh     = ctx.tmp('shtGh');
       const dh     = ctx.tmp('shtDh');
+      const stepOcc = ctx.tmp('shtSO');
+      const distFade = ctx.tmp('shtDF');
+      const px     = ctx.tmp('shtPx');
       const hs = glslNum(ctx.params.heightScale);
       const md = glslNum(ctx.params.maxDist);
       const dk = glslNum(ctx.params.darkness);
       const sk = glslNum(ctx.params.sharpness);
-      const invPrefix = ctx.params.invert === 'yes' ? '(1.0 - ' : '(';
-      const invSuffix = ctx.params.invert === 'yes' ? ')'        : ')';
+      const br = glslNum(ctx.params.blurRadius);
+      const fs = glslNum(ctx.params.fadeStart);
+      const invPrefix = ctx.params.invert === 'yes' ? '(1.0 - (' : '((';
+      const invSuffix = ctx.params.invert === 'yes' ? ') * 0.2)' : ' * 0.2)';
+      const blurredSample = (uvExpr) =>
+        `${invPrefix}` +
+        `texture2D(${uName}, fract(${uvExpr})).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2(-${px}.x, 0.0))).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2( ${px}.x, 0.0))).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2(0.0, -${px}.y))).r + ` +
+        `texture2D(${uName}, fract(${uvExpr} + vec2(0.0,  ${px}.y))).r` +
+        `${invSuffix}`;
       return {
         setup:
 `float ${result} = 1.0;
 if (u_shadows > 0.5) {
-  float ${startH} = ${invPrefix}texture2D(${uName}, fract(${ctx.inputs.pos}))${invSuffix}.r * ${hs};
+  vec2 ${px} = vec2(${br});
+  float ${startH} = (${blurredSample(ctx.inputs.pos)}) * ${hs};
   float ${lxy} = length(${ctx.inputs.lightDir}.xy);
   if (${lxy} > 0.001) {
     float ${occ} = 1.0;
     float ${tt}; vec2 ${xy}; float ${rh}; float ${gh}; float ${dh};
+    float ${stepOcc}; float ${distFade};
     for (int _shti = 1; _shti <= 24; _shti++) {
       ${tt} = (float(_shti) / 24.0) * ${md};
       ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
       ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
-      ${gh} = ${invPrefix}texture2D(${uName}, fract(${xy}))${invSuffix}.r * ${hs};
+      ${gh} = (${blurredSample(xy)}) * ${hs};
       ${dh} = ${rh} - ${gh};
-      if (${dh} < 0.0) { ${occ} = 0.0; break; }
-      ${occ} = min(${occ}, ${sk} * ${dh} / ${tt});
+      // Hard hit: still attenuate by distance fade so the trailing edge of
+      // a fully-occluded ray fades smoothly rather than terminating in a
+      // hard pixelated step.
+      ${distFade} = smoothstep(${md} * ${fs}, ${md}, ${tt});
+      if (${dh} < 0.0) { ${occ} = min(${occ}, ${distFade}); break; }
+      ${stepOcc} = ${sk} * ${dh} / ${tt};
+      // Lerp this step's occlusion contribution toward "fully lit" (1.0)
+      // as `t` approaches maxDist, producing a smooth shadow tail.
+      ${occ} = min(${occ}, mix(${stepOcc}, 1.0, ${distFade}));
     }
     ${result} = mix(${dk}, 1.0, clamp(${occ}, 0.0, 1.0));
   }
@@ -1728,6 +1758,7 @@ if (u_shadows > 0.5) {
       {name:'scale',     kind:'number', default:2.5,  min:0.1,  max:20,  step:0.1},
       {name:'maxDist',   kind:'number', default:0.4,  min:0.05, max:2,   step:0.05},
       {name:'sharpness', kind:'number', default:16,   min:1,    max:128, step:1},
+      {name:'fadeStart', kind:'number', default:0.5,  min:0,    max:1,   step:0.05},
       {name:'darkness',  kind:'number', default:0.35, min:0,    max:1,   step:0.05},
     ],
     helpers:['snoise', 'fbm', 'heightField'],
@@ -1749,9 +1780,12 @@ if (u_shadows > 0.5) {
       const rh     = ctx.tmp('shRh');
       const gh     = ctx.tmp('shGh');
       const dh     = ctx.tmp('shDh');
+      const stepOcc  = ctx.tmp('shSO');
+      const distFade = ctx.tmp('shDF');
       const sc = glslNum(ctx.params.scale);
       const md = glslNum(ctx.params.maxDist);
       const sk = glslNum(ctx.params.sharpness);
+      const fs = glslNum(ctx.params.fadeStart);
       const dk = glslNum(ctx.params.darkness);
       return {
         setup:
@@ -1762,14 +1796,17 @@ if (u_shadows > 0.5) {
   if (${lxy} > 0.001) {
     float ${occ} = 1.0;
     float ${tt}; vec2 ${xy}; float ${rh}; float ${gh}; float ${dh};
+    float ${stepOcc}; float ${distFade};
     for (int _shi = 1; _shi <= 24; _shi++) {
       ${tt} = (float(_shi) / 24.0) * ${md};
       ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
       ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
       ${gh} = heightField(${xy}, ${sc}, ${ctx.inputs.time});
       ${dh} = ${rh} - ${gh};
-      if (${dh} < 0.0) { ${occ} = 0.0; break; }
-      ${occ} = min(${occ}, ${sk} * ${dh} / ${tt});
+      ${distFade} = smoothstep(${md} * ${fs}, ${md}, ${tt});
+      if (${dh} < 0.0) { ${occ} = min(${occ}, ${distFade}); break; }
+      ${stepOcc} = ${sk} * ${dh} / ${tt};
+      ${occ} = min(${occ}, mix(${stepOcc}, 1.0, ${distFade}));
     }
     ${result} = mix(${dk}, 1.0, clamp(${occ}, 0.0, 1.0));
   }
