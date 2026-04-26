@@ -1503,212 +1503,108 @@ function tplPixelFlow(){
   c(post,  'out', out,   'color');
 }
 
-/* ---- Pixel Sort — Matrix-rain lines growing from top to bottom ---- */
-/* Each "slot" (a coarse column cell) hosts ONE thin vertical bar at a
- * per-cell-random x position. The bar grows continuously from the top of
- * the screen down to a head position that descends as time advances; when
- * the head reaches the bottom, the cycle resets and a new bar spawns at
- * the top.
- *   - floor(x * SLOTS) gives a slot index. SLOTS controls how many
- *     simultaneous bars can exist (one per slot).
- *   - Random(slot) gives stable per-slot speed, hue, and an x-jitter so
- *     bars sit at random positions within each slot (no visible grid).
- *   - centerX = (slot + jitter) / SLOTS gives the bar's actual x.
- *   - xMask = 1 if |x - centerX| < BAR_HALF, with a small AA edge → very
- *     thin bar.
- *   - phase = fract(time * speed + jitter), head = 1 - phase
- *   - yMask = 1 if y >= head (so the lit region spans top-of-screen down
- *     to head; as head descends, the line grows).
- *   - bright = xMask * yMask, color = palette(hue) — full-saturation
- *     constant brightness inside the line, black elsewhere. */
+/* ---- Pixel Sort — UV-displacement melt of a Voronoi color field ---- */
+/* True pixel-sort / databending aesthetic via the classic "drag the V
+ * coordinate" trick:
+ *   1. Stretched-UV simplex (x*15, y*0.02) gives a 1D-ish noise that
+ *      varies in x but barely in y → vertical bands of varying intensity
+ *      at irregular x positions. Step it to a binary mask: some columns
+ *      melt, others don't.
+ *   2. displacement = time * mask * speed. In masked columns the value
+ *      grows linearly with time; in unmasked columns it's zero.
+ *   3. Subtract displacement from y → "displaced V coordinate". Sample
+ *      points get pulled UP in source space, so colors visually flow DOWN.
+ *   4. Sample Voronoi at (x, displacedY). Voronoi gives discrete colored
+ *      cells, so each streak shows ONE solid color until the displacement
+ *      crosses into a neighbouring cell — at which point the color snaps
+ *      to a new value (the "cycle" change). Colors below stay because
+ *      their pixels' displacement crossed cell boundaries earlier in time.
+ *   5. Voronoi `id` → cosine palette → bright multi-colored cells. */
 function tplPixelSort(){
   _clearGraph();
   const { n, c } = _tplHelpers();
 
   // sources
-  const uv     = n('uv',         -1700,    0);
-  const tDrip  = n('time',       -1700,  280, { scale: 0.25 });
+  const uv     = n('uv',         -1400,    0);
+  const tDrip  = n('time',       -1400,  280, { scale: 0.20 });
 
-  // split UV into x, y in [0, 1]
-  const split  = n('splitVec2',  -1440,    0);
+  const split  = n('splitVec2',  -1140,    0);
 
-  // ---------- slot index ----------
-  const slots   = 800.0;
-  const xMul   = n('multiply',   -1180, -180, {}, { b: slots });
-  const slot   = n('floor',       -940, -180);
+  // ---------- streak mask: stretched-UV simplex → step ----------
+  // x * 15 produces ~15 cycles of noise across the screen; y * 0.02 means
+  // the noise barely changes vertically — so the field is essentially 1D
+  // along x, giving wide and narrow vertical bands at irregular positions.
+  const xStretch = n('multiply',   -880, -180, {}, { b: 15.0 });
+  const yStretch = n('multiply',   -880,  -60, {}, { b: 0.02 });
+  const maskUV   = n('makeVec2',   -620, -120);
+  const maskN    = n('simplex',    -360, -120);
 
-  // distinct hash seeds per slot
-  const seedSp = n('add',         -700, -300, {}, { b: 11.0 });
-  const seedHu = n('add',         -700, -180, {}, { b: 41.0 });
-  const seedPh = n('add',         -700,  -60, {}, { b: 71.0 });
+  // simplex output is in roughly [-1, 1]. step(0.05, n) gives ~50% of x
+  // positions that "drip" and ~50% that stay still, with widths varying
+  // naturally because the noise field has variable widths.
+  const mask     = n('step',       -100, -120, {}, { edge: 0.05 });
 
-  // 3D seed for the random hash. rngHash3 produces visible periodic patterns
-  // when only one of (x,y,z) varies and the other two are zero — which is
-  // what happens if you wire only `seed`. Building vec3(slot, slot*0.617,
-  // slot*1.293) and feeding it into seedVec3 gives the hash three
-  // independently-stretched linear sequences, killing the repeats.
-  const slotG  = n('multiply',    -700,  -440, {}, { b: 0.617 });
-  const slotB  = n('multiply',    -440,  -440, {}, { b: 1.293 });
-  const seed3  = n('makeVec3',    -180,  -440);
+  // ---------- time displacement: only flows where mask = 1 ----------
+  const dispRaw  = n('multiply',    160, -120);   // tDrip * mask
+  const disp     = n('multiply',    420, -120, {}, { b: 0.7 });   // overall flow speed
 
-  // per-slot speed & hue & phase (stable)
-  const speed  = n('random',      -440, -300, { mode:'decimal', precision: 4 }, { min: 0.6, max: 2.0 });
-  const hueSd  = n('random',      -440, -180, { mode:'decimal', precision: 4 }, { min: 0.0, max: 1.0 });
-  const phaseO = n('random',      -440,  -60, { mode:'decimal', precision: 4 }, { min: 0.0, max: 1.0 });
+  // y_displaced = y - disp. Subtracting moves the SAMPLE point UP in source
+  // space, so colors at higher Y appear at lower screen Y — visual downflow.
+  const yDisp    = n('subtract',    680,    0);
 
-  // ---------- timing & dual cycles ----------
-  const tSpd    = n('multiply',    -180,  220);
-  const phaseR  = n('add',           60,  220);
-  const cycle   = n('floor',        320,  340);
-  const cycleP  = n('subtract',     320,  460, {}, { b: 1.0 });
-  const phase   = n('fract',        320,  220);
+  // ---------- base color: Voronoi cells of solid color ----------
+  // Voronoi gives discrete cells. Each cell has a stable random `id` in
+  // [0, 1). Sampling Voronoi at displaced UV means: as displacement grows,
+  // the sample crosses cell boundaries → color snaps to the new cell's id.
+  // Within a cell the color is CONSTANT, which is why each streak shows a
+  // solid color until it "cycles" into the next cell.
+  const sampleUV = n('makeVec2',    940,    0);
+  const cells    = n('voronoi',    1200,    0, { scale: 9 });
 
-  // ---------- dual jitters (current and previous) ----------
-  const cycScl  = n('multiply',     580,  340, {}, { b: 113.0 });
-  const sjMix   = n('add',          840,  340);
-  const jitter  = n('random',      1100,  340, { mode:'decimal', precision: 4 }, { min: 0.05, max: 0.95 });
+  // id → cosine palette → bright multi-coloured cell
+  const pal      = n('palette',    1460,    0);
 
-  const cycSclP = n('multiply',     580,  460, {}, { b: 113.0 });
-  const sjMixP  = n('add',          840,  460);
-  const jitterP = n('random',      1100,  460, { mode:'decimal', precision: 4 }, { min: 0.05, max: 0.95 });
+  // ---------- final tweaks ----------
+  const sat      = n('saturation', 1720,    0, {}, { scale: 1.6 });
+  const finalC   = n('contrast',   1980,    0, {}, { contrast: 1.4 });
 
-  // ---------- dual xMasks ----------
-  // Step replaces the prior smoothstep+subtract pair. step(edge=distX, x=BAR_HALF)
-  // returns 1 when distX <= BAR_HALF (inside the bar), 0 outside — hard glitch edge.
-  const mkXMask = (x, y, j) => {
-    const s  = n('add',      x,        y);
-    const d  = n('divide',   x + 240,  y, {}, { b: slots });
-    const dx = n('subtract', x + 480,  y);
-    const ax = n('abs',      x + 720,  y);
-    const mk = n('step',     x + 960,  y, {}, { x: 0.0005 });   // bar half-width
-    c(slot, 'out', s,  'a');
-    c(j,    'out', s,  'b');
-    c(s,    'out', d,  'a');
-    c(split,'x',   dx, 'a');
-    c(d,    'out', dx, 'b');
-    c(dx,   'out', ax, 'x');
-    c(ax,   'out', mk, 'edge');
-    return mk;
-  };
-
-  const xMask  = mkXMask(1360, 340, jitter);
-  const xMaskP = mkXMask(1360, 460, jitterP);
-
-  // ---------- y mask head (1 -> 0 dripping down) ----------
-  const head   = n('subtract',     580,  220, {}, { a: 1.0 });
-  // Snap the head to 60 discrete y-tiers so the line descends in glitchy
-  // VHS-scanline jumps instead of sliding smoothly. The seamless swap below
-  // still works because splitY just reads whatever head value is current.
-  const headQ  = n('posterizeFloat', 840, 220, {}, { levels: 240 });
-  const splitY = n('smoothstep',  1100,  220, {}, { a: 0.0, b: 0.005 });
-
-  // ---------- seamless swap composite ----------
-  // Above head = New line; Below head = Old line.
-  // bright is FLOAT-valued (combining two float xMasks) so it must use Lerp,
-  // not Mix. (Mix is the vec3 lerp; using it on float inputs produces a
-  // float expression assigned to a vec3 var → "dimension mismatch" error.)
-  const bright = n('lerp',        2700,  400);
-  const litCol = n('mix',         2960,  400);
-
-  // ---------- vertical texture: stretched FBM ----------
-  const uvXScl = n('multiply',    -440,   40, {}, { b: 0.1 });
-  const uvTex  = n('makeVec2',    -180,   40);
-  const tTex   = n('time',        -180,  120, { scale: 0.4 });
-  const texFbm = n('fbm',          60,   40, { octaves: 4 });
-  const texScl = n('multiply',    320,   40, {}, { b: 0.25 });
-  const texHue = n('add',         560,  -80);
-  const pal    = n('palette',     820, -120);
-
-  // ---------- final color, contrast, and bloom ----------
-  const sat    = n('saturation',  3220,  400, {}, { scale: 1.8 });
-  const finalC = n('contrast',    3480,  400, {}, { contrast: 1.3 });
-
-  const out    = n('output',      3740,  400, {
+  const out      = n('output',     2240,    0, {
     bloom:          'on',
-    bloomThreshold: 0.1,
-    bloomRadius:    3.5,
-    bloomIntensity: 1.8,
+    bloomThreshold: 0.6,
+    bloomRadius:    2.0,
+    bloomIntensity: 0.6,
   });
 
   // ---------- wiring ----------
   c(uv,    'out', split, 'v');
 
-  // slot index: floor(x * SLOTS). Without this, slot is floor(0.0) = 0 for
-  // every pixel, so all bars render at the leftmost slot's x position only.
-  c(split, 'x',   xMul, 'a');
-  c(xMul,  'out', slot, 'x');
+  // mask UV
+  c(split,    'x',   xStretch, 'a');
+  c(split,    'y',   yStretch, 'a');
+  c(xStretch, 'out', maskUV,   'x');
+  c(yStretch, 'out', maskUV,   'y');
+  c(maskUV,   'out', maskN,    'p');
+  c(maskN,    'out', mask,     'x');     // step(edge=0.05, x=maskN)
 
-  // 3D seed = vec3(slot, slot*0.617, slot*1.293). All three randoms below
-  // share this seedVec3 — their distinct `seed` inputs (11/41/71) still make
-  // each one produce an independent value, but now the hash sees full 3D
-  // entropy instead of (0, 0, slot+offset).
-  c(slot,  'out', slotG, 'a');
-  c(slot,  'out', slotB, 'a');
-  c(slot,  'out', seed3, 'r');
-  c(slotG, 'out', seed3, 'g');
-  c(slotB, 'out', seed3, 'b');
+  // displacement
+  c(tDrip, 'out', dispRaw, 'a');
+  c(mask,  'out', dispRaw, 'b');
+  c(dispRaw,'out', disp,   'a');         // disp = tDrip * mask * 0.7
 
-  // stable hashes
-  c(slot,  'out', seedSp, 'a');
-  c(slot,  'out', seedHu, 'a');
-  c(slot,  'out', seedPh, 'a');
-  c(seedSp,'out', speed,  'seed');
-  c(seedHu,'out', hueSd,  'seed');
-  c(seedPh,'out', phaseO, 'seed');
-  c(seed3, 'out', speed,  'seedVec3');
-  c(seed3, 'out', hueSd,  'seedVec3');
-  c(seed3, 'out', phaseO, 'seedVec3');
+  // displaced y = y - disp
+  c(split, 'y',   yDisp, 'a');
+  c(disp,  'out', yDisp, 'b');
 
-  // timing & dual cycles
-  c(tDrip,  'out', tSpd,   'a');
-  c(speed,  'out', tSpd,   'b');
-  c(tSpd,   'out', phaseR, 'a');
-  c(phaseO, 'out', phaseR, 'b');
-  c(phaseR, 'out', cycle,  'x');
-  c(cycle,  'out', cycleP, 'a');
-  c(phaseR, 'out', phase,  'x');
+  // sample UV for voronoi
+  c(split, 'x',   sampleUV, 'x');
+  c(yDisp, 'out', sampleUV, 'y');
+  c(sampleUV, 'out', cells, 'p');
 
-  // jitters
-  c(cycle,  'out', cycScl, 'a');
-  c(slot,   'out', sjMix,  'a');
-  c(cycScl, 'out', sjMix,  'b');
-  c(sjMix,  'out', jitter, 'seed');
-
-  c(cycleP, 'out', cycSclP, 'a');
-  c(slot,   'out', sjMixP,  'a');
-  c(cycSclP,'out', sjMixP,  'b');
-  c(sjMixP, 'out', jitterP, 'seed');
-
-  // split at head: phase 0 (top) to 1 (bottom). Head goes through Posterize Float
-  // first, snapping it to 60 discrete steps as it descends.
-  c(phase, 'out', head,   'b');
-  c(head,  'out', headQ,  'x');
-  c(split, 'y',   splitY, 'a');
-  c(headQ, 'out', splitY, 'b');
-
-  // mix: above head (splitY=1) -> xMask; below head (splitY=0) -> xMaskP
-  c(xMaskP, 'out', bright, 'a');
-  c(xMask,  'out', bright, 'b');
-  c(splitY, 'out', bright, 't');
-
-  // vertical texture
-  c(split,  'x',   uvXScl, 'a');
-  c(uvXScl, 'out', uvTex,  'x');
-  c(split,  'y',   uvTex,  'y');
-  c(uvTex,  'out', texFbm, 'p');
-  c(tTex,   'out', texFbm, 'z');
-  c(texFbm, 'out', texScl, 'a');
-  c(hueSd,  'out', texHue, 'a');
-  c(texScl,  'out', texHue, 'b');
-  c(texHue,  'out', pal,    't');
-
-  // color composite
-  c(pal,    'out', litCol, 'b');
-  c(bright, 'out', litCol, 't');
-
-  c(litCol, 'out', sat,    'rgb');
-  c(sat,    'out', finalC, 'color');
-  c(finalC, 'out', out,    'color');
+  // cell id → palette → final color chain
+  c(cells, 'id',  pal, 't');
+  c(pal,   'out', sat, 'rgb');
+  c(sat,   'out', finalC, 'color');
+  c(finalC,'out', out, 'color');
 }
 
 /* ---- Cosmic Star — Soft Glow + Starburst + HDR Boost ---- */
