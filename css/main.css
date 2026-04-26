@@ -109,19 +109,25 @@ body::after{
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  min-width:20px;
-  padding:2px 7px;
+  min-width:22px;
+  padding:3px 8px;
   font-family:'JetBrains Mono', ui-monospace, monospace;
+  font-style:normal;
   font-size:10px;
+  font-weight:500;
   letter-spacing:.04em;
-  color:var(--ink);
-  background:linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02));
-  border:1px solid rgba(255,255,255,.22);
+  color:#fff;
+  /* Solid dark base so the chip reads against the busy shader background,
+     with a subtle top highlight for the 3D key-cap look. */
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.04) 60%, rgba(0,0,0,.18)),
+    rgba(28,28,36,.92);
+  border:1px solid rgba(255,255,255,.28);
   border-radius:5px;
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.18),
-    0 1.5px 0 rgba(0,0,0,.55),
-    0 2.5px 4px rgba(0,0,0,.45);
+    inset 0 1px 0 rgba(255,255,255,.25),
+    0 1.5px 0 rgba(0,0,0,.7),
+    0 3px 6px rgba(0,0,0,.5);
   text-transform:none;
   user-select:none;
 }
