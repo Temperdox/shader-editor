@@ -1084,9 +1084,12 @@ function renderFlagBody(node, nodeEl, bodyEl){
     if (isSocketConnected(node.id, 'in', `in${i}`)) ext.classList.add('connected');
     row.appendChild(ext);
 
+    // Label text reflects the upstream node's title (e.g. "Vignette") when
+    // connected, or falls back to the generic "inN". Re-rendered on every
+    // connect/disconnect because renderAll rebuilds the whole body.
     const lbl = document.createElement('span');
     lbl.className = 'flag-label';
-    lbl.textContent = `in${i}`;
+    lbl.textContent = flagSocketLabel(node.id, `in${i}`, `in${i}`);
     row.appendChild(lbl);
 
     // Per-input passthrough toggle: when off, this input contributes
@@ -1153,7 +1156,9 @@ function renderFlagBody(node, nodeEl, bodyEl){
 
     const lbl = document.createElement('span');
     lbl.className = 'flag-label';
-    lbl.textContent = `out${j}`;
+    // Output label reflects the downstream consumer (the first one if there
+    // are multiple), e.g. "Output" or "Mix". Falls back to "outN".
+    lbl.textContent = flagOutputLabel(node.id, `out${j}`, `out${j}`);
     row.appendChild(lbl);
 
     const ext = document.createElement('div');
@@ -1232,6 +1237,31 @@ function flagSetOutputCount(node, target){
   renderAll();
   scheduleRecompile();
   pushHistory();
+}
+
+/* Looks up the upstream node feeding a Flag's input socket and returns its
+   `def.title` (e.g. "Vignette"). Used to label Flag input rows with the
+   actual connected source instead of a generic "inN". Falls back to the
+   provided default when nothing's wired. */
+function flagSocketLabel(nodeId, socketName, fallback){
+  const conn = state.connections.find(c =>
+    c.to.nodeId === nodeId && c.to.socket === socketName);
+  if (!conn) return fallback;
+  const upstream = state.nodes.find(n => n.id === conn.from.nodeId);
+  if (!upstream) return fallback;
+  const def = NODE_TYPES[upstream.type];
+  return (def && def.title) || fallback;
+}
+/* Same idea but for outputs: pick the first downstream consumer and label
+   the row with its title. */
+function flagOutputLabel(nodeId, socketName, fallback){
+  const conn = state.connections.find(c =>
+    c.from.nodeId === nodeId && c.from.socket === socketName);
+  if (!conn) return fallback;
+  const downstream = state.nodes.find(n => n.id === conn.to.nodeId);
+  if (!downstream) return fallback;
+  const def = NODE_TYPES[downstream.type];
+  return (def && def.title) || fallback;
 }
 
 /* Socket centre in zone-local pixel coords, walked via offsetParent chain so
