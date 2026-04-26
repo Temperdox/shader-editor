@@ -110,13 +110,18 @@ $('#shadowsBtn').addEventListener('click', () => {
 
   function pickMime(){
     if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) return null;
+    // WebM first: Chrome/Edge MediaRecorder MP4 muxing is buggy and the resulting
+    // files often fail to play in Windows Media Player / QuickTime even though
+    // isTypeSupported() returns true. WebM (VP9/VP8) plays reliably in browsers
+    // and VLC. Convert to MP4 externally with ffmpeg if needed.
     const candidates = [
-      ['video/mp4;codecs=avc1.42E01E', 'mp4'],   // H.264 baseline — most compatible MP4
-      ['video/mp4;codecs=avc1',        'mp4'],
-      ['video/mp4',                    'mp4'],
+      ['video/webm;codecs=vp9,opus',   'webm'],
       ['video/webm;codecs=vp9',        'webm'],
       ['video/webm;codecs=vp8',        'webm'],
       ['video/webm',                   'webm'],
+      ['video/mp4;codecs=avc1.42E01E', 'mp4'],
+      ['video/mp4;codecs=avc1',        'mp4'],
+      ['video/mp4',                    'mp4'],
     ];
     for (const [m, e] of candidates){
       if (MediaRecorder.isTypeSupported(m)) return { mime: m, ext: e };
