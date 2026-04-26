@@ -2304,6 +2304,98 @@ float ${t} = ${a} * ${ctx.inputs.freq} + ${ctx.inputs.bias};`,
     },
   },
 
+  /* ---- Flag (Float) — same patch-bay UI, but float sockets so you can
+     route scalar masks/values through it. Connection validator does strict
+     type-equality (see editor.js validWireTarget), which is why you can't
+     plug a float into the regular vec3-typed Flag. ---- */
+  flagFloat: {
+    category:'Module', title:'Flag (Float)', desc:'patch bay for float values — internally wire inputs to outputs, toggle each',
+    info:'Same patch-bay logic as Flag but the sockets are floats instead of vec3 colors. Use it to A/B-test scalar signals (mask values, noise outputs, animation drivers) without re-wiring. The combined output is the SUM of all enabled inputs wired to that output, just like the vec3 Flag.',
+    inputs:  (node) => {
+      const n = (node && node.params && node.params.numInputs) || 0;
+      const list = [];
+      for (let i = 0; i < n; i++) list.push({ name: `in${i}`, type: 'float', default: 0 });
+      return list;
+    },
+    outputs: (node) => {
+      const n = (node && node.params && node.params.numOutputs) || 0;
+      const list = [];
+      for (let j = 0; j < n; j++) list.push({ name: `out${j}`, type: 'float' });
+      return list;
+    },
+    customBody: 'flag',
+    params: [
+      { name:'numInputs',    kind:'hidden', default: 3 },
+      { name:'numOutputs',   kind:'hidden', default: 3 },
+      { name:'enabled',      kind:'hidden', default: [true, true, true] },
+      { name:'inputEnabled', kind:'hidden', default: [true, true, true] },
+      { name:'wires',        kind:'hidden', default: [] },
+    ],
+    generate: (ctx) => {
+      const numOut       = (ctx.node.params.numOutputs) || 0;
+      const enabled      = Array.isArray(ctx.node.params.enabled)      ? ctx.node.params.enabled      : [];
+      const inputEnabled = Array.isArray(ctx.node.params.inputEnabled) ? ctx.node.params.inputEnabled : [];
+      const wires        = Array.isArray(ctx.node.params.wires)        ? ctx.node.params.wires        : [];
+      const exprs = {};
+      for (let j = 0; j < numOut; j++){
+        if (enabled[j] === false){ exprs[`out${j}`] = '0.0'; continue; }
+        const feeds = wires
+          .filter(w => w.to === j && inputEnabled[w.from] !== false)
+          .map(w => ctx.inputs[`in${w.from}`])
+          .filter(Boolean);
+        if (feeds.length === 0)      exprs[`out${j}`] = '0.0';
+        else if (feeds.length === 1) exprs[`out${j}`] = feeds[0];
+        else                         exprs[`out${j}`] = `(${feeds.join(' + ')})`;
+      }
+      return { exprs };
+    },
+  },
+
+  /* ---- Flag (Vec2) — same patch-bay UI, but vec2 sockets for UVs and
+     2D offsets. ---- */
+  flagVec2: {
+    category:'Module', title:'Flag (Vec2)', desc:'patch bay for vec2 values (UVs / offsets) — internally wire inputs to outputs, toggle each',
+    info:'Same patch-bay logic as Flag but the sockets are vec2s instead of vec3 colors. Use it to A/B-test alternative UVs, offset sources, or any 2D signal without re-wiring. Combined output sums all enabled inputs wired to a given output.',
+    inputs:  (node) => {
+      const n = (node && node.params && node.params.numInputs) || 0;
+      const list = [];
+      for (let i = 0; i < n; i++) list.push({ name: `in${i}`, type: 'vec2', default: [0, 0] });
+      return list;
+    },
+    outputs: (node) => {
+      const n = (node && node.params && node.params.numOutputs) || 0;
+      const list = [];
+      for (let j = 0; j < n; j++) list.push({ name: `out${j}`, type: 'vec2' });
+      return list;
+    },
+    customBody: 'flag',
+    params: [
+      { name:'numInputs',    kind:'hidden', default: 3 },
+      { name:'numOutputs',   kind:'hidden', default: 3 },
+      { name:'enabled',      kind:'hidden', default: [true, true, true] },
+      { name:'inputEnabled', kind:'hidden', default: [true, true, true] },
+      { name:'wires',        kind:'hidden', default: [] },
+    ],
+    generate: (ctx) => {
+      const numOut       = (ctx.node.params.numOutputs) || 0;
+      const enabled      = Array.isArray(ctx.node.params.enabled)      ? ctx.node.params.enabled      : [];
+      const inputEnabled = Array.isArray(ctx.node.params.inputEnabled) ? ctx.node.params.inputEnabled : [];
+      const wires        = Array.isArray(ctx.node.params.wires)        ? ctx.node.params.wires        : [];
+      const exprs = {};
+      for (let j = 0; j < numOut; j++){
+        if (enabled[j] === false){ exprs[`out${j}`] = 'vec2(0.0)'; continue; }
+        const feeds = wires
+          .filter(w => w.to === j && inputEnabled[w.from] !== false)
+          .map(w => ctx.inputs[`in${w.from}`])
+          .filter(Boolean);
+        if (feeds.length === 0)      exprs[`out${j}`] = 'vec2(0.0)';
+        else if (feeds.length === 1) exprs[`out${j}`] = feeds[0];
+        else                         exprs[`out${j}`] = `(${feeds.join(' + ')})`;
+      }
+      return { exprs };
+    },
+  },
+
   /* ---- terminal ---- */
   output: {
     category:'Output', title:'Fragment Output', desc:'gl_FragColor + specular-driven bloom',
