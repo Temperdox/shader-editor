@@ -1624,6 +1624,11 @@ function tplPixelSort(){
   // ---------- wiring ----------
   c(uv,    'out', split, 'v');
 
+  // slot index: floor(x * SLOTS). Without this, slot is floor(0.0) = 0 for
+  // every pixel, so all bars render at the leftmost slot's x position only.
+  c(split, 'x',   xMul, 'a');
+  c(xMul,  'out', slot, 'x');
+
   // stable hashes
   c(slot,  'out', seedSp, 'a');
   c(slot,  'out', seedHu, 'a');
