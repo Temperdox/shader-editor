@@ -1,70 +1,102 @@
 /* Global-level interactions: pan/zoom, right-click context menu, add-module picker. */
 
 /* ---------------- pan / zoom ----------------
- * Middle mouse pans (records the down position + current view translate, then
- * re-derives on move). Wheel zooms toward the cursor by keeping the logical
- * point under the mouse fixed before/after the scale change. */
+ * Middle mouse pans (always available, regardless of tool mode). Wheel zooms
+ * toward the cursor. Left mouse behavior depends on state.toolMode:
+ *   - 'select' (default): on empty space → marquee select; on node → drag/select
+ *   - 'pan'   : on empty space → drag the view (alternate path for users
+ *               whose mouse has no middle button)
+ *   - 'zoom'  : on empty space → click-to-zoom-in (Shift+click → zoom out) */
 (() => {
-  let middleDown = false;
+  let panDown = false;
   let startX = 0, startY = 0, startTX = 0, startTY = 0;
+
+  // Helper used by both middle-click and tool=pan left-click paths.
+  function beginPan(e){
+    panDown = true;
+    startX = e.clientX; startY = e.clientY;
+    startTX = state.view.tx; startTY = state.view.ty;
+    graphEl.classList.add('panning');
+    e.preventDefault();
+  }
+
+  // Zoom around a screen-space point, keeping that point's world coord fixed.
+  function zoomAt(cx, cy, factor){
+    const rect = graphEl.getBoundingClientRect();
+    const px = cx - rect.left, py = cy - rect.top;
+    const newScale = clamp(state.view.scale * factor, 0.2, 3.5);
+    const realFactor = newScale / state.view.scale;
+    state.view.tx = px - (px - state.view.tx) * realFactor;
+    state.view.ty = py - (py - state.view.ty) * realFactor;
+    state.view.scale = newScale;
+    updateViewportTransform();
+  }
 
   graphEl.addEventListener('pointerdown', (e) => {
     if (e.button === 1){
-      middleDown = true;
-      startX = e.clientX; startY = e.clientY;
-      startTX = state.view.tx; startTY = state.view.ty;
-      graphEl.classList.add('panning');
-      e.preventDefault();
+      beginPan(e);
       return;
     }
-    // left-click on empty graph space: clear selection (unless shift/ctrl)
-    // and begin a marquee drag. We only accept the click when the target is
-    // the graph surface itself or the grid overlay — clicks on nodes, SVG
-    // connection paths, or UI chrome must NOT start a marquee.
-    if (e.button === 0){
-      const onEmpty =
-        e.target === graphEl ||
-        e.target === viewportEl ||
-        e.target === connectionsEl ||
-        e.target.classList?.contains('graph-grid') ||
-        e.target === connectionsEl?.ownerSVGElement;
-      if (onEmpty){
-        if (!e.shiftKey && !e.ctrlKey && !e.metaKey){
-          state.selected.clear();
-          refreshSelectionClasses();
-        }
-        startMarquee(e);
-        e.preventDefault();
+    if (e.button !== 0) return;
+
+    const onEmpty =
+      e.target === graphEl ||
+      e.target === viewportEl ||
+      e.target === connectionsEl ||
+      e.target.classList?.contains('graph-grid') ||
+      e.target === connectionsEl?.ownerSVGElement;
+
+    // Tool-mode-specific behaviors take precedence on empty space; over a
+    // node/socket we always defer to the node's own handlers.
+    if (onEmpty){
+      if (state.toolMode === 'pan'){
+        beginPan(e);
+        return;
       }
+      if (state.toolMode === 'zoom'){
+        zoomAt(e.clientX, e.clientY, e.shiftKey ? 1 / 1.5 : 1.5);
+        e.preventDefault();
+        return;
+      }
+      // select mode (default)
+      if (!e.shiftKey && !e.ctrlKey && !e.metaKey){
+        state.selected.clear();
+        refreshSelectionClasses();
+      }
+      startMarquee(e);
+      e.preventDefault();
     }
   });
+
   window.addEventListener('pointermove', (e) => {
-    if (!middleDown) return;
+    if (!panDown) return;
     state.view.tx = startTX + (e.clientX - startX);
     state.view.ty = startTY + (e.clientY - startY);
     updateViewportTransform();
   });
   window.addEventListener('pointerup', (e) => {
-    if (e.button === 1){
-      middleDown = false;
+    if (panDown && (e.button === 0 || e.button === 1)){
+      panDown = false;
       graphEl.classList.remove('panning');
     }
   });
 
   graphEl.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const rect = graphEl.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const newScale = clamp(state.view.scale * factor, 0.2, 3.5);
-    const realFactor = newScale / state.view.scale;
-    // keep the world point under (cx, cy) stationary after zoom
-    state.view.tx = cx - (cx - state.view.tx) * realFactor;
-    state.view.ty = cy - (cy - state.view.ty) * realFactor;
-    state.view.scale = newScale;
-    updateViewportTransform();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12);
   }, { passive: false });
+
+  // Shift toggles zoom-out cursor while in zoom mode for visual feedback.
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift' && state.toolMode === 'zoom'){
+      graphEl.classList.add('zoom-out');
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift'){
+      graphEl.classList.remove('zoom-out');
+    }
+  });
 })();
 
 /* ---------------- context menu ---------------- */

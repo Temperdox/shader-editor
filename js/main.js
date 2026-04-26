@@ -20,6 +20,32 @@ if (snapBtn){
   });
 }
 
+// Tool mode toolbar (left edge of the graph). Sets state.toolMode read by
+// the pointerdown handler in interactions.js. Also pushes the mode onto
+// #graph as a data-tool attribute so CSS can swap the cursor and styling.
+(() => {
+  const toolBtns = $$('.graph-tool-btn');
+  const graphEl  = $('#graph');
+  if (!toolBtns.length || !graphEl) return;
+  function setMode(mode){
+    state.toolMode = mode;
+    graphEl.dataset.tool = mode;
+    toolBtns.forEach(b => b.classList.toggle('active', b.dataset.tool === mode));
+  }
+  toolBtns.forEach(b => b.addEventListener('click', () => setMode(b.dataset.tool)));
+  // Keyboard shortcuts: V = Select, H = Pan, Z = Zoom (matching Photoshop /
+  // Figma conventions). Skipped while typing in inputs/textareas.
+  window.addEventListener('keydown', (e) => {
+    const t = e.target;
+    const tag = (t && t.tagName) ? t.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'v' || e.key === 'V') setMode('select');
+    else if (e.key === 'h' || e.key === 'H') setMode('pan');
+    else if (e.key === 'z' || e.key === 'Z') setMode('zoom');
+  });
+})();
+
 // Hide/Show — hides all UI chrome so only the background shader + these fabs
 // are visible. Toggles the button label between "Hide" and "Show".
 $('#hideUiBtn').addEventListener('click', () => {

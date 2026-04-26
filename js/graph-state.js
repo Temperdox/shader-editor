@@ -11,6 +11,7 @@ const state = {
   view: { tx: 0, ty: 0, scale: 1 },
   selected: new Set(), // Set<nodeId> — empty = nothing selected
   snapToGrid: false,   // when true, drag snaps node top-left to GRID_SNAP_PX
+  toolMode: 'select',  // 'select' | 'pan' | 'zoom' — set by the left toolbar
 };
 // Drag snap step. Matches the small (22px) gridlines drawn by .graph-grid
 // so snapped nodes visually land on grid intersections.

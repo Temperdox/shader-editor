@@ -87,7 +87,13 @@ body::after{
   position:fixed;
   left:50%; top:50%;
   transform:translate(-50%,-50%);
-  width:80vw; height:80vh;
+  /* Use most of the viewport so the editor fits comfortably on small
+     monitors but caps on huge ones. The clamp keeps things sane on
+     ultrawide displays where 92vw would be hilariously wide. */
+  width:clamp(800px, 92vw, 2200px);
+  height:clamp(540px, 92vh, 1400px);
+  max-width:96vw;
+  max-height:96vh;
   z-index:10;
 
   background:
@@ -220,6 +226,53 @@ body::after{
     radial-gradient(900px 600px at 80% 90%, rgba(255,184,107,.035), transparent 70%);
 }
 .graph.panning{ cursor:grabbing }
+/* Tool-mode cursors. The data-tool attribute is set on #graph by main.js
+   when the user clicks one of the tool buttons. select = default behavior;
+   pan = ready to drag the view; zoom = ready to click-zoom. */
+.graph[data-tool="pan"]{ cursor:grab }
+.graph[data-tool="pan"].panning{ cursor:grabbing }
+.graph[data-tool="zoom"]{ cursor:zoom-in }
+.graph[data-tool="zoom"].zoom-out{ cursor:zoom-out }
+
+/* ---- left-edge tool toolbar (Select / Pan / Zoom) ---- */
+.graph-tools{
+  position:absolute;
+  left:10px; top:10px;
+  z-index:6;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  padding:4px;
+  background:rgba(22,22,28,.70);
+  backdrop-filter:blur(10px) saturate(1.5);
+  -webkit-backdrop-filter:blur(10px) saturate(1.5);
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:10px;
+  box-shadow:0 8px 24px -10px rgba(0,0,0,.5);
+}
+.graph-tool-btn{
+  width:32px; height:32px;
+  background:transparent;
+  border:1px solid transparent;
+  color:var(--ink-faint);
+  border-radius:7px;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+  transition:background .12s, color .12s, border-color .12s, transform .1s;
+}
+.graph-tool-btn:hover{
+  background:rgba(255,255,255,.08);
+  color:var(--ink);
+}
+.graph-tool-btn:active{ transform:scale(.94) }
+.graph-tool-btn.active{
+  background:linear-gradient(135deg, rgba(185,165,255,.32), rgba(185,165,255,.10));
+  border-color:rgba(185,165,255,.7);
+  color:#fff;
+}
 .graph-grid{
   position:absolute; inset:0;
   pointer-events:none;
