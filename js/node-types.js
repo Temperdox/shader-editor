@@ -1643,6 +1643,62 @@ float ${f} = smoothstep(${ctx.inputs.threshold}, ${ctx.inputs.threshold} + max($
       };
     },
   },
+  shadowTex: {
+    category:'Effect', title:'Shadow Tex', desc:'raycast shadow using a height-map texture (aligns with the source map)',
+    inputs:[
+      {name:'pos',      type:'vec2', default:[0, 0]},
+      {name:'lightDir', type:'vec3', default:[0, 0, 1]},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    params:[
+      {name:'imageUrl',    kind:'image',     default:''},
+      {name:'invert',      kind:'segmented', default:'no', options:['no', 'yes']},
+      {name:'heightScale', kind:'number',    default:0.06, min:0,    max:0.5, step:0.005},
+      {name:'maxDist',     kind:'number',    default:0.12, min:0.01, max:1,   step:0.01},
+      {name:'darkness',    kind:'number',    default:0.45, min:0,    max:1,   step:0.05},
+    ],
+    // Like the procedural Shadow node but the height field comes from a
+    // texture sample, so cast shadows align with the SAME details that
+    // any other Texture node sees. Ideal for texture-driven materials
+    // (bricks, fabric, terrain photography). Sampled with fract() so the
+    // image tiles outside [0,1]. `invert: yes` flips the height
+    // interpretation (use it when dark = high in your map).
+    generate:(ctx) => {
+      const uName = glslUniformName(ctx.node.id, 'sh');
+      const result = ctx.tmp('shtR');
+      const startH = ctx.tmp('shtH0');
+      const lxy    = ctx.tmp('shtL');
+      const tt     = ctx.tmp('shtT');
+      const xy     = ctx.tmp('shtXy');
+      const rh     = ctx.tmp('shtRh');
+      const gh     = ctx.tmp('shtGh');
+      const hs = glslNum(ctx.params.heightScale);
+      const md = glslNum(ctx.params.maxDist);
+      const dk = glslNum(ctx.params.darkness);
+      const invPrefix = ctx.params.invert === 'yes' ? '(1.0 - ' : '(';
+      const invSuffix = ctx.params.invert === 'yes' ? ')'        : ')';
+      return {
+        setup:
+`float ${result} = 1.0;
+if (u_shadows > 0.5) {
+  float ${startH} = ${invPrefix}texture2D(${uName}, fract(${ctx.inputs.pos}))${invSuffix}.r * ${hs};
+  float ${lxy} = length(${ctx.inputs.lightDir}.xy);
+  if (${lxy} > 0.001) {
+    float ${tt}; vec2 ${xy}; float ${rh}; float ${gh};
+    for (int _shti = 1; _shti <= 14; _shti++) {
+      ${tt} = (float(_shti) / 14.0) * ${md};
+      ${xy} = ${ctx.inputs.pos} + ${ctx.inputs.lightDir}.xy * ${tt};
+      ${rh} = ${startH} + ${ctx.inputs.lightDir}.z / ${lxy} * ${tt};
+      ${gh} = ${invPrefix}texture2D(${uName}, fract(${xy}))${invSuffix}.r * ${hs};
+      if (${gh} > ${rh}) { ${result} = ${dk}; break; }
+    }
+  }
+}`,
+        exprs:{ out: result },
+        textures:[{ uniformName: uName }],
+      };
+    },
+  },
   shadow: {
     category:'Effect', title:'Shadow', desc:'raycast heightfield shadow factor (0=shadowed, 1=lit)',
     inputs:[

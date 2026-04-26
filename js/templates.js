@@ -449,14 +449,13 @@ function tplBrickWall(){
  *      is white → no effect. Flag on → multiplier is (1 − noise) →
  *      grainy darkening that breaks up the glossy spot.
  *
- *   3. Raycast SHADOWS from the new Shadow node. Each fragment marches
- *      a procedural FBM heightfield toward the cursor light and returns
- *      a 0..1 lit factor that multiplies the diffuse. With the Shadows
- *      button off the Shadow node short-circuits to 1.0 (no effect);
- *      preview mode always casts. Note that the shadow heightfield is
- *      procedural noise — it won't perfectly align with the static brick
- *      mortar pattern, but it adds atmospheric light-direction-driven
- *      darkening that makes the wall feel deeper.
+ *   3. Raycast SHADOWS from the new Shadow Tex node, sampling the SAME
+ *      spec map as a height field (bright = brick face, dark = mortar
+ *      groove). Each fragment marches the spec map's height along the
+ *      cursor's light direction; brick faces actually cast shadows into
+ *      neighbouring mortar grooves. Multiplied into the lit diffuse.
+ *      With the Shadows button off the node short-circuits to 1.0
+ *      (no effect); preview mode always casts.
  */
 function tplBrickWallSpec(){
   _clearGraph();
@@ -480,11 +479,20 @@ function tplBrickWallSpec(){
   const lit   = n('mix',      -340,   20);
 
   // --- Raycast shadow lane ---
-  // Marches a procedural FBM heightfield (scale 6 ≈ brick frequency) along
-  // the cursor's light direction, returns a 0..1 factor that we multiply
-  // into the lit diffuse. When the Shadows button is OFF the node returns
-  // 1.0 → no effect. Preview mode always casts.
-  const shad        = n('shadow',     -680, -300, { scale: 6.0, maxDist: 0.25, darkness: 0.4 });
+  // Uses Shadow Tex (NOT the procedural Shadow node) so the cast shadows
+  // align with the SAME spec map that drives the highlight: bright pixels
+  // in spec.png = raised brick faces, dark pixels = recessed mortar. The
+  // ray-march samples spec.r as a height field, so a brick face actually
+  // casts a shadow into the mortar groove next to it. Without this the
+  // shadows look like procedural noise overlaid on bricks (the prior
+  // Rorschach-y look) — they have to come from the texture itself.
+  const shad        = n('shadowTex',  -680, -300, {
+    imageUrl:    SPEC_URL,
+    invert:      'no',          // bright = high (brick face), dark = low (mortar)
+    heightScale: 0.04,
+    maxDist:     0.08,
+    darkness:    0.45,
+  });
   const shadGray    = n('grayscale',  -340, -300);
   const litShadowed = n('blend',         0,  -80, { mode: 'multiply' });
 
@@ -537,9 +545,11 @@ function tplBrickWallSpec(){
   c(diff,  'rgb', lit, 'b');
   c(lamb,  'out', lit, 't');
 
-  // shadow factor: lit × shadow (multiplicative). Shadows reuse the same
-  // sim-light direction so the cast direction matches the lighting.
-  c(cuv,         'p',   shad, 'pos');
+  // shadow factor: lit × shadow (multiplicative).
+  // Shadow Tex samples its height map in 0..1 UV space, matching the brick
+  // texture lookup — so we feed it the same `uv` (NOT centeredUV). Light
+  // direction reuses simL.out so cast direction matches the diffuse light.
+  c(uv,          'out', shad, 'pos');
   c(simL,        'out', shad, 'lightDir');
   c(shad,        'out', shadGray, 'x');
   c(lit,         'out', litShadowed, 'a');
