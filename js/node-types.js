@@ -584,6 +584,21 @@ const NODE_TYPES = {
       out:`clamp(${ctx.inputs.x}, ${ctx.inputs.a}, ${ctx.inputs.b})`,
     } }),
   },
+  remap: {
+    category:'Math', title:'Remap', desc:'map x from [inA, inB] to [outA, outB]',
+    info:'Maps a value from one range [inA, inB] to another [outA, outB]. Essential for "tuning" values without complex multiplication/addition chains.',
+    inputs:[
+      {name:'x',    type:'float', default:0.5},
+      {name:'inA',  type:'float', default:0.0},
+      {name:'inB',  type:'float', default:1.0},
+      {name:'outA', type:'float', default:0.0},
+      {name:'outB', type:'float', default:1.0},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{
+      out: `((${ctx.inputs.x} - ${ctx.inputs.inA}) / (${ctx.inputs.inB} - ${ctx.inputs.inA} + 0.00001) * (${ctx.inputs.outB} - ${ctx.inputs.outA}) + ${ctx.inputs.outA})`,
+    } }),
+  },
   smoothstep: {
     category:'Math', title:'Smoothstep', desc:'smoothstep(a, b, x)',
     info:'Soft S-curve threshold between a and b: returns 0 below a, 1 above b, with a smoothly interpolated rise in between. Use for anti-aliased mask edges, soft falloff zones, or wherever you\'d reach for `step()` but want it look organic. Requires a < b for defined behavior — flip your math if you need an inverse (or subtract from 1).',
