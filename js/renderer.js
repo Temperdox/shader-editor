@@ -134,6 +134,10 @@ const renderer = (() => {
     gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
       const log = gl.getShaderInfoLog(s);
+      // Dump the source to console so the user can see exactly what failed.
+      const tag = type === gl.VERTEX_SHADER ? 'VS' : 'FS';
+      const numbered = src.split('\n').map((l, i) => String(i + 1).padStart(3, ' ') + ': ' + l).join('\n');
+      console.error(`[${tag} compile error]\n${log}\n--- source ---\n${numbered}`);
       gl.deleteShader(s);
       throw new Error(log);
     }
