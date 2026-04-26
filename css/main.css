@@ -199,6 +199,15 @@ body::after{
 }
 .tool-btn:active{transform:scale(.97)}
 .tool-btn .plus{ font-size:14px; line-height:1; margin-top:-1px }
+/* Active toggle state — used by the Snap button when grid-snapping is on. */
+.tool-btn.active{
+  color:#fff;
+  background:linear-gradient(135deg, rgba(185,165,255,.32), rgba(185,165,255,.10));
+  border-color:rgba(185,165,255,.7);
+}
+.tool-btn.active:hover{
+  background:linear-gradient(135deg, rgba(205,185,255,.42), rgba(185,165,255,.18));
+}
 
 /* ---- graph canvas inside the modal ---- */
 .graph{
@@ -314,7 +323,26 @@ body::after{
   align-items:center;
   gap:6px;
 }
+/* The button's outer box is 24x24 (transparent) so the click target is large
+   and forgiving, but the visible circle (rendered via ::before) stays a small
+   14x14 dot to avoid crowding the header. */
 .node-info-btn{
+  width:24px; height:24px;
+  background:transparent;
+  border:none;
+  padding:0;
+  margin:0 -5px 0 0;       /* pull negative margin so the bigger hit area
+                              doesn't widen the header visually */
+  cursor:pointer;
+  user-select:none;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font:inherit;
+  color:inherit;
+}
+.node-info-btn::before{
+  content:'i';
   width:14px; height:14px;
   border-radius:50%;
   background:rgba(255,255,255,.06);
@@ -325,20 +353,17 @@ body::after{
   font-weight:400;
   font-size:10px;
   line-height:1;
-  display:inline-flex;
+  display:flex;
   align-items:center;
   justify-content:center;
-  padding:0;
-  cursor:pointer;
-  user-select:none;
   transition:background .12s, color .12s, border-color .12s, transform .1s;
 }
-.node-info-btn:hover{
+.node-info-btn:hover::before{
   background:rgba(185,165,255,.22);
   border-color:rgba(185,165,255,.65);
   color:#fff;
 }
-.node-info-btn:active{ transform:scale(.92) }
+.node-info-btn:active::before{ transform:scale(.92) }
 .node-body{ padding:8px 0 }
 .node-row{
   position:relative;

@@ -9,6 +9,17 @@ $('#clearGraphBtn').addEventListener('click', clearGraph);
 $('#saveShaderBtn').addEventListener('click', () => openSaveModal());
 $('#loadShaderBtn').addEventListener('click', () => openLoadModal());
 
+// Snap to grid toggle — flips state.snapToGrid (read by attachNodeDrag in
+// editor.js). Active state is reflected with the .active class so the
+// button visibly shows whether snapping is currently on.
+const snapBtn = $('#snapGridBtn');
+if (snapBtn){
+  snapBtn.addEventListener('click', () => {
+    state.snapToGrid = !state.snapToGrid;
+    snapBtn.classList.toggle('active', state.snapToGrid);
+  });
+}
+
 // Hide/Show — hides all UI chrome so only the background shader + these fabs
 // are visible. Toggles the button label between "Hide" and "Show".
 $('#hideUiBtn').addEventListener('click', () => {

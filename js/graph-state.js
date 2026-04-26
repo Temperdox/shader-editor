@@ -10,7 +10,11 @@ const state = {
   connections: [],   // { id, from:{nodeId,socket}, to:{nodeId,socket} }
   view: { tx: 0, ty: 0, scale: 1 },
   selected: new Set(), // Set<nodeId> — empty = nothing selected
+  snapToGrid: false,   // when true, drag snaps node top-left to GRID_SNAP_PX
 };
+// Drag snap step. Matches the small (22px) gridlines drawn by .graph-grid
+// so snapped nodes visually land on grid intersections.
+const GRID_SNAP_PX = 22;
 
 // Clipboard for copy/paste/duplicate. Separate from state so it survives
 // template loads and clear-graph. Values are plain serializable objects.

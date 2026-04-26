@@ -44,7 +44,7 @@ function renderNode(node){
     <div class="node-title">${escapeHTML(def.title)}</div>
     <div class="node-header-meta">
       <div class="node-cat">${escapeHTML(def.category)}</div>
-      <button class="node-info-btn" type="button" title="Module info" aria-label="Module info">i</button>
+      <button class="node-info-btn" type="button" title="Module info" aria-label="Module info"></button>
     </div>
   `;
   // Info button: open the per-node info modal. Stop propagation so the click
@@ -618,8 +618,20 @@ function attachNodeDrag(el, node){
     el.classList.add('dragging');
 
     const onMove = (ev) => {
-      const dx = (ev.clientX - startX) / state.view.scale;
-      const dy = (ev.clientY - startY) / state.view.scale;
+      let dx = (ev.clientX - startX) / state.view.scale;
+      let dy = (ev.clientY - startY) / state.view.scale;
+      // Grid snap: snap the LEAD node's new position to the nearest grid
+      // cell, then derive the snapped delta. The whole group shifts by the
+      // same delta so relative offsets within the selection are preserved.
+      if (state.snapToGrid){
+        const ref = origins.get(group[0].id);
+        const targetX = ref.x + dx;
+        const targetY = ref.y + dy;
+        const snappedX = Math.round(targetX / GRID_SNAP_PX) * GRID_SNAP_PX;
+        const snappedY = Math.round(targetY / GRID_SNAP_PX) * GRID_SNAP_PX;
+        dx = snappedX - ref.x;
+        dy = snappedY - ref.y;
+      }
       if (dx !== 0 || dy !== 0) moved = true;
       for (const g of group){
         const o = origins.get(g.id);
@@ -1590,20 +1602,17 @@ function openNodeInfoModal(node){
   nodeInfoCat.textContent   = (def.category || '').toUpperCase();
 
   const sections = [];
-  // Description (always present)
-  if (def.desc){
+  // Two description fields by convention:
+  //   def.desc — concise one-liner used in the picker / Add Module modal
+  //   def.info — verbose explanation used here in the info modal
+  // The info modal prefers `info` and falls back to `desc` for nodes that
+  // haven't been given a verbose entry yet.
+  const longDesc = def.info || def.desc;
+  if (longDesc){
     sections.push(`
       <div class="ni-section">
         <div class="ni-section-title">Description</div>
-        <div class="ni-section-body">${escapeHTML(def.desc)}</div>
-      </div>`);
-  }
-  // Use Cases / extended info (optional per-node)
-  if (def.info){
-    sections.push(`
-      <div class="ni-section">
-        <div class="ni-section-title">Use Cases</div>
-        <div class="ni-section-body">${escapeHTML(def.info)}</div>
+        <div class="ni-section-body">${escapeHTML(longDesc)}</div>
       </div>`);
   }
   // Inputs
