@@ -646,8 +646,8 @@ body::after{
 body.ui-hidden .chrome,
 body.ui-hidden .modal,
 body.ui-hidden .ctx,
-body.ui-hidden .picker,
-body.ui-hidden .picker-backdrop,
+body.ui-hidden .picker:not(.save-video-modal),
+body.ui-hidden .picker-backdrop:not(#saveVideoBack),
 body.ui-hidden .toast{
   display:none !important;
 }
