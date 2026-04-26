@@ -764,6 +764,44 @@ float ${scaled} = mix(${ctx.inputs.min}, ${ctx.inputs.max}, ${rand});`;
     outputs:[{name:'out', type:'vec2'}],
     generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.v} * ${ctx.inputs.s})` } }),
   },
+  scaleVec3: {
+    category:'Vector', title:'Scale Vec3', desc:'v * s',
+    inputs:[{name:'v', type:'vec3', default:[0,0,0]}, {name:'s', type:'float', default:1}],
+    outputs:[{name:'out', type:'vec3'}],
+    generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.v} * ${ctx.inputs.s})` } }),
+  },
+  /* "Strength" knobs — semantic alias for scale-by-float on each vector
+     dimension. Same math as scaleVecN, but the names + defaults read like
+     an effect amount: 1 = full strength (passthrough), 0 = none, >1 boosts.
+     Use these whenever you want to dial a connection up or down without
+     thinking about it as multiplication. */
+  strength: {
+    category:'Effect', title:'Strength', desc:'scale a vec3 (color/normal) by a strength amount',
+    inputs:[
+      {name:'in',       type:'vec3',  default:[0,0,0]},
+      {name:'strength', type:'float', default:1},
+    ],
+    outputs:[{name:'out', type:'vec3'}],
+    generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.in} * ${ctx.inputs.strength})` } }),
+  },
+  strengthVec2: {
+    category:'Effect', title:'Strength (Vec2)', desc:'scale a vec2 (UV/offset) by a strength amount',
+    inputs:[
+      {name:'in',       type:'vec2',  default:[0,0]},
+      {name:'strength', type:'float', default:1},
+    ],
+    outputs:[{name:'out', type:'vec2'}],
+    generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.in} * ${ctx.inputs.strength})` } }),
+  },
+  strengthFloat: {
+    category:'Effect', title:'Strength (Float)', desc:'scale a float by a strength amount',
+    inputs:[
+      {name:'in',       type:'float', default:0},
+      {name:'strength', type:'float', default:1},
+    ],
+    outputs:[{name:'out', type:'float'}],
+    generate:(ctx) => ({ exprs:{ out:`(${ctx.inputs.in} * ${ctx.inputs.strength})` } }),
+  },
   parallaxUV: {
     category:'Vector', title:'Parallax UV', desc:'shift UV by direction × depth (per-layer parallax)',
     inputs:[
