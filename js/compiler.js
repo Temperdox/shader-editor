@@ -1,23 +1,32 @@
-/* Compiler — graph → GLSL fragment shader.
+/* Compiler — graph → GLSL fragment shader(s).
  *
- * Walks backward from the Fragment Output node in postorder to get a topological
- * ordering, resolves each input socket to either the upstream temp variable
- * or a default literal, and emits one GLSL statement per node. Helpers
- * (snoise/fbm/marble) are only emitted if a reachable node references them.
+ * Walks backward from the Fragment Output node in postorder to get a
+ * topological ordering. Then PARTITIONS the graph into passes:
+ *   - Any node whose type has `passCache: 'live'` becomes a pass root.
+ *   - Each pass renders the subgraph terminating at that root into an
+ *     off-screen RGBA8 framebuffer. The renderer caches the FBO and
+ *     samples it in the main pass. Pass roots that are reachable in
+ *     OTHER passes are sampled from the upstream pass's FBO (so passes
+ *     can chain).
+ * The main-pass shader then references each pass-root output via a
+ * single `texture2D(u_pass_N, v_uv)` decode instead of inlining the
+ * full subgraph — turning ~12-30 snoise calls into one texture fetch.
  *
- * The single-output shorthand: a node's generate() may return a bare string,
- * which is treated as { exprs: { <firstOutput>: string } }.
+ * Encoding for pass FBO contents (RGBA8):
+ *   float → vec4(v*0.5+0.5, 0, 0, 1)
+ *   vec2  → vec4(v*0.5+0.5, 0, 1)
+ *   vec3  → vec4(v*0.5+0.5, 1)
+ * Decoded with the inverse `(t * 2.0 - 1.0)`. Quantization step ≈ 1/256.
+ *
+ * If no node has `passCache` set the compiler emits a single program
+ * (the original fast path), so existing graphs are unaffected.
  */
 
 /* True when a connection's source is a Flag-variant output that's currently
  * "muted" — meaning the output should NOT push a value to whatever's
- * downstream. Two muted states:
- *   1) the OUTPUT-side toggle is off (params.enabled[j] === false)
- *   2) every internal wire feeding that output is gated off via the
- *      INPUT-side toggle (params.inputEnabled[w.from] === false)
- * In either case the compiler treats the wire as if it didn't exist, so the
- * downstream socket falls back to its declared default literal — preventing
- * the Flag from "overriding" downstream until re-enabled. */
+ * downstream. See node-types.js Flag.generate for the runtime semantics;
+ * the compiler treats muted-Flag wires as if they didn't exist so the
+ * downstream socket falls back to its declared default. */
 function isFlagOutputMuted(srcNode, socketName){
   if (!srcNode) return false;
   const t = srcNode.type;
@@ -31,57 +40,68 @@ function isFlagOutputMuted(srcNode, socketName){
   const wires        = Array.isArray(params.wires)        ? params.wires        : [];
   if (enabled[j] === false) return true;
   const feeds = wires.filter(w => w.to === j);
-  if (feeds.length === 0) return true; // nothing internally wired
+  if (feeds.length === 0) return true;
   return !feeds.some(w => inputEnabled[w.from] !== false);
 }
 
-function compileGraph(){
-  const output = state.nodes.find(n => n.type === 'output');
-  if (!output) return { ok: false, error: 'no Fragment Output node' };
+/* Pass-FBO encoding/decoding helpers — emitted in every shader that
+ * either writes a pass output or reads one. Kept tiny to avoid bloat. */
+const PASS_CODEC_HELPERS = `
+vec4 _packPassFloat(float v){ return vec4(v * 0.5 + 0.5, 0.0, 0.0, 1.0); }
+vec4 _packPassVec2 (vec2  v){ return vec4(v * 0.5 + 0.5, 0.0, 1.0); }
+vec4 _packPassVec3 (vec3  v){ return vec4(v * 0.5 + 0.5, 1.0); }
+float _unpackPassFloat(vec4 t){ return t.r * 2.0 - 1.0; }
+vec2  _unpackPassVec2 (vec4 t){ return t.rg * 2.0 - 1.0; }
+vec3  _unpackPassVec3 (vec4 t){ return t.rgb * 2.0 - 1.0; }
+`;
 
-  // reverse-adjacency index: nodeId → connections landing on its inputs
-  const edgesByTo = new Map();
-  for (const conn of state.connections){
-    if (!edgesByTo.has(conn.to.nodeId)) edgesByTo.set(conn.to.nodeId, []);
-    edgesByTo.get(conn.to.nodeId).push(conn);
-  }
+const HELPER_RANK = {
+  snoise:         0,
+  fbm:            1,
+  marble:         2,
+  heightField:    2,
+  ridgedFbm:      1,
+  rngHash3:       0,
+  voronoi2:       0,
+  hsv2rgb:        0,
+  rgb2hsv:        0,
+  palette:        0,
+  rotateVec3:     0,
+  sdfHexagon:     0,
+  sdfTriangle:    0,
+  sdfCrystal:     1,
+  sdfNormal3D:    0,
+  heightToNormal: 0,
+};
 
-  // DFS postorder from output → topological sort, with cycle detection
-  const visited = new Set();
-  const order = [];
-  const visiting = new Set();
-  let cycleDetected = false;
-
-  function visit(nodeId){
-    if (visited.has(nodeId)) return;
-    if (visiting.has(nodeId)){ cycleDetected = true; return; }
-    visiting.add(nodeId);
-    const edges = edgesByTo.get(nodeId) || [];
-    for (const e of edges) visit(e.from.nodeId);
-    visiting.delete(nodeId);
-    visited.add(nodeId);
-    order.push(nodeId);
-  }
-  visit(output.id);
-
-  if (cycleDetected) return { ok: false, error: 'cycle detected in graph' };
-
-  const nodeById = new Map(state.nodes.map(n => [n.id, n]));
-  const outputRefs = new Map();  // nodeId → { socketName: glslVarName }
+/* Emit GLSL statements for a list of ordered node IDs. Used both for the
+ * main pass and for each cache pass — the caller controls input override
+ * (so pass roots from outside the current shader can be replaced with
+ * texture samples). Collects helpers/extensions/textures/inline functions
+ * encountered along the way. Returns { body, outputRefs, ... } or
+ * { error: '...' } on a node-level generate failure. */
+function emitNodes({ orderedIds, nodeById, edgesByTo, externalRefs, tmpCounterRef }){
   const helpers = new Set();
-  const extensions = new Set();  // GLSL #extension directives needed (e.g. GL_OES_standard_derivatives)
-  const textureBindings = [];    // [{ nodeId, uniformName }] — sampler2D needed by the compiled program
-  const inlineFunctions = [];    // per-node GLSL function definitions emitted to file scope (after helpers)
+  const extensions = new Set();
+  const textureBindings = [];
+  const inlineFunctions = [];
   const body = [];
-  let tmpCounter = 0;
+  const outputRefs = new Map();
 
-  for (const nid of order){
+  for (const nid of orderedIds){
     const node = nodeById.get(nid);
     if (!node) continue;
     const def = NODE_TYPES[node.type];
 
-    // resolve each input: connected → upstream ref; otherwise default literal.
-    // Nodes with dynamic socket schemas (Flag) expose `inputs` as a function.
+    // If this node is supplied as an external ref (e.g. an upstream pass
+    // root that's been baked to a texture and decoded already), skip
+    // generation and reuse the pre-built refs.
+    if (externalRefs && externalRefs.has(nid)){
+      outputRefs.set(nid, externalRefs.get(nid));
+      continue;
+    }
+
+    // Resolve each input socket: connected → upstream ref; otherwise default.
     const inputExprs = {};
     const schemaInputs = getNodeInputs(node);
     if (schemaInputs){
@@ -89,14 +109,11 @@ function compileGraph(){
         const conn = (edgesByTo.get(nid) || []).find(e => e.to.socket === sock.name);
         if (conn){
           const srcNode = nodeById.get(conn.from.nodeId);
-          // Muted Flag outputs behave as no-connection so this socket falls
-          // back to its default literal instead of being overridden by 0.
           if (isFlagOutputMuted(srcNode, conn.from.socket)){
             inputExprs[sock.name] = defaultLiteral(sock, node.defaults[sock.name]);
           } else {
             const upstream = outputRefs.get(conn.from.nodeId);
             const ref = upstream && upstream[conn.from.socket];
-            // stale connections (e.g. upstream output removed) fall back gracefully
             inputExprs[sock.name] = ref ?? defaultLiteral(sock, node.defaults[sock.name]);
           }
         } else {
@@ -109,17 +126,10 @@ function compileGraph(){
       node,
       inputs: inputExprs,
       params: node.params,
-      tmp:(prefix) => `_${prefix}_${(++tmpCounter).toString(36)}`,
-      // Let generate() distinguish "input has an upstream wire" from "input
-      // is unconnected and falling back to its default literal." Only a few
-      // nodes need this — the Color node uses it so unconnected channels
-      // fall back to the color-picker param instead of the socket's default.
+      tmp: (prefix) => `_${prefix}_${(++tmpCounterRef.value).toString(36)}`,
       isConnected: (socketName) => {
         return (edgesByTo.get(nid) || []).some(e => {
           if (e.to.socket !== socketName) return false;
-          // A muted Flag source counts as "not connected" here too, so
-          // nodes like Color (which switches between socket overrides and
-          // its picker param based on isConnected) behave consistently.
           const srcNode = nodeById.get(e.from.nodeId);
           return !isFlagOutputMuted(srcNode, e.from.socket);
         });
@@ -130,62 +140,29 @@ function compileGraph(){
     try {
       result = def.generate(ctx);
     } catch (e){
-      return { ok: false, error: `${def.title}: ${e.message}` };
+      return { error: `${def.title}: ${e.message}` };
     }
 
-    // static helpers from the node definition
-    if (def.helpers){
-      for (const h of def.helpers) helpers.add(h);
-    }
-    if (def.extensions){
-      for (const x of def.extensions) extensions.add(x);
-    }
+    if (def.helpers)    for (const h of def.helpers) helpers.add(h);
+    if (def.extensions) for (const x of def.extensions) extensions.add(x);
 
-    // single-expression shorthand
     const schemaOutputs = getNodeOutputs(node);
     if (typeof result === 'string'){
       const firstOut = (schemaOutputs && schemaOutputs[0] && schemaOutputs[0].name) || 'out';
       result = { exprs: { [firstOut]: result } };
     }
-
-    // dynamic helpers chosen at generate() time (e.g. a node that only needs
-    // snoise in one of its modes)
-    if (Array.isArray(result.helpers)){
-      for (const h of result.helpers) helpers.add(h);
-    }
-    if (Array.isArray(result.extensions)){
-      for (const x of result.extensions) extensions.add(x);
-    }
-
-    // sampler2D uniforms this node needs. Compiler emits the declarations in
-    // the prelude; the renderer binds textures to the corresponding slots.
-    if (Array.isArray(result.textures)){
-      for (const tex of result.textures){
-        textureBindings.push({ nodeId: node.id, uniformName: tex.uniformName });
-      }
-    }
-
-    // Per-node helper functions. Unlike `helpers` (global, named utilities
-    // like snoise/fbm), these are bespoke functions defined for THIS node
-    // instance — typically with a name suffixed by node.id to stay unique
-    // across multiple instances. Emitted to file scope, after the global
-    // helpers and before main(), so the node's setup can call them.
-    if (Array.isArray(result.inlineFunctions)){
-      for (const fn of result.inlineFunctions) inlineFunctions.push(fn);
-    }
+    if (Array.isArray(result.helpers))    for (const h of result.helpers) helpers.add(h);
+    if (Array.isArray(result.extensions)) for (const x of result.extensions) extensions.add(x);
+    if (Array.isArray(result.textures))   for (const tex of result.textures) textureBindings.push({ nodeId: node.id, uniformName: tex.uniformName });
+    if (Array.isArray(result.inlineFunctions)) for (const fn of result.inlineFunctions) inlineFunctions.push(fn);
 
     if (result.setup) body.push(result.setup);
 
-    // Materialize each output to a named temp so downstream references are
-    // linear (and so an expression feeding two consumers is only computed
-    // once in the emitted GLSL).
     const refs = {};
     if (schemaOutputs){
       for (const out of schemaOutputs){
         const expr = result.exprs && result.exprs[out.name];
         if (expr === undefined) continue;
-        // If the expression is a bare identifier (like `u_time` or `x.y`),
-        // skip the temp and reference it directly.
         if (/^[a-zA-Z_][\w]*(\.[a-zA-Z]+)?$/.test(expr)){
           refs[out.name] = expr;
         } else {
@@ -198,78 +175,263 @@ function compileGraph(){
     outputRefs.set(nid, refs);
   }
 
-  // helper blocks, ordered so dependencies come first
-  // (snoise → fbm → {marble, heightField}; the rest are standalone.)
-  const HELPER_RANK = {
-    snoise:      0,
-    fbm:         1,
-    marble:      2,
-    heightField: 2,
-    ridgedFbm:   1,   // depends on snoise, peer of fbm
-    rngHash3:    0,
-    voronoi2:    0,
-    hsv2rgb:     0,
-    rgb2hsv:     0,
-    palette:     0,
-    rotateVec3:  0,
-    sdfHexagon:  0,
-    sdfTriangle: 0,
-    sdfCrystal:  1,   // depends on sdfHexagon + sdfTriangle
-    sdfNormal3D: 0,
-    heightToNormal: 0,
-  };
-  // When state.useAnalyticNoise is set (debug toggle), swap the textured
-  // snoise helper for the original analytic 3D simplex. The function name
-  // stays `snoise` either way so all callsites are unchanged.
-  const useAnalytic = state.useAnalyticNoise === true;
-  const preludeHelpers = [...helpers]
+  return { body, outputRefs, helpers, extensions, textureBindings, inlineFunctions };
+}
+
+/* Build the prelude (helpers + sampler declarations) shared by all shader
+ * variants in a compile. `passInputDecls` lists `uniform sampler2D u_pass_N;`
+ * lines for the cache textures this shader will sample.  */
+function buildPrelude({ helpers, extensions, textureBindings, inlineFunctions, useAnalytic, passInputDecls }){
+  const sortedHelpers = [...helpers]
     .sort((a, b) => (HELPER_RANK[a] ?? 9) - (HELPER_RANK[b] ?? 9))
     .map(k => (k === 'snoise' && useAnalytic) ? SHADER_HELPERS['snoiseAnalytic'] : SHADER_HELPERS[k])
     .join('\n');
 
-  // The textured snoise helper reads from `u_noise` (a sampler2D bound to
-  // a fixed slot by the renderer); inject the declaration whenever that
-  // helper is reachable. Analytic mode skips this — no sampler needed.
-  const noiseSamplerDecl = (helpers.has('snoise') && !useAnalytic)
-    ? 'uniform sampler2D u_noise;'
-    : '';
+  const noiseSamplerDecl = (helpers.has('snoise') && !useAnalytic) ? 'uniform sampler2D u_noise;' : '';
+  const samplerDecls = [
+    noiseSamplerDecl,
+    ...textureBindings.map(b => `uniform sampler2D ${b.uniformName};`),
+    ...(passInputDecls || []),
+  ].filter(Boolean).join('\n');
 
-  const samplerDecls = [noiseSamplerDecl, ...textureBindings.map(b => `uniform sampler2D ${b.uniformName};`)]
-    .filter(Boolean)
-    .join('\n');
+  const extDecls = [...extensions].map(x => `#extension ${x} : enable`).join('\n');
 
-  // #extension directives MUST come before anything else (GLSL ES 1.00 spec).
-  const extDecls = [...extensions]
-    .map(x => `#extension ${x} : enable`)
-    .join('\n');
-
-  const fs = `${extDecls}
+  return `${extDecls}
 precision mediump float;
 uniform float u_time;
 uniform vec2  u_mouse;
 uniform vec2  u_resolution;
-// Sim-lighting uniform: vec3 light direction that tracks the cursor when the
-// Lighting button is active, or (0, 0, 1) when off. See renderer.js.
 uniform vec3  u_simLight;
-// Shadow toggle — driven by the Shadows button in the editor (always 1.0
-// in preview mode). Read by the Shadow node to skip the raymarch loop and
-// return 1.0 (no shadow) when 0.0.
 uniform float u_shadows;
-// Test-surface varying: the VS computes a procedural 3D normal from a noise
-// height field and passes it here. Reads (0, 0, 1) when the Surface button
-// is off. See renderer.js's vertex shader.
 varying vec3  v_surfaceNormal;
 ${samplerDecls}
 varying vec2  v_uv;
 
-${preludeHelpers}
+${PASS_CODEC_HELPERS}
+
+${sortedHelpers}
 
 ${inlineFunctions.join('\n')}
+`;
+}
 
+/* Walk back from `rootId` collecting every ancestor that's NOT itself in
+ * the `excludePassRoots` set. Pass roots in that set become "external"
+ * inputs to this pass — sampled from their FBOs, not recomputed. */
+function collectPassSubgraph(rootId, edgesByTo, excludePassRoots, nodeById){
+  const visited = new Set();
+  const ordered = [];
+  const visiting = new Set();
+  function visit(id){
+    if (visited.has(id)) return;
+    if (visiting.has(id)) return; // cycle — already detected in the main pass
+    visiting.add(id);
+    // Don't recurse INTO other pass roots — they're sampled, not included.
+    // The pass's own root IS visited normally.
+    if (id !== rootId && excludePassRoots.has(id)){
+      visiting.delete(id);
+      visited.add(id);
+      return;
+    }
+    const edges = edgesByTo.get(id) || [];
+    for (const e of edges) visit(e.from.nodeId);
+    visiting.delete(id);
+    visited.add(id);
+    ordered.push(id);
+  }
+  visit(rootId);
+  return ordered;
+}
+
+function compileGraph(){
+  const output = state.nodes.find(n => n.type === 'output');
+  if (!output) return { ok: false, error: 'no Fragment Output node' };
+
+  // ---------- topological order from output ----------
+  const edgesByTo = new Map();
+  for (const conn of state.connections){
+    if (!edgesByTo.has(conn.to.nodeId)) edgesByTo.set(conn.to.nodeId, []);
+    edgesByTo.get(conn.to.nodeId).push(conn);
+  }
+  const visited = new Set();
+  const order = [];
+  const visiting = new Set();
+  let cycleDetected = false;
+  function visit(nid){
+    if (visited.has(nid)) return;
+    if (visiting.has(nid)){ cycleDetected = true; return; }
+    visiting.add(nid);
+    const edges = edgesByTo.get(nid) || [];
+    for (const e of edges) visit(e.from.nodeId);
+    visiting.delete(nid);
+    visited.add(nid);
+    order.push(nid);
+  }
+  visit(output.id);
+  if (cycleDetected) return { ok: false, error: 'cycle detected in graph' };
+
+  const nodeById = new Map(state.nodes.map(n => [n.id, n]));
+  const useAnalytic = state.useAnalyticNoise === true;
+
+  // ---------- pass partition ----------
+  // Pass roots: nodes whose type opts into FBO caching. The Output node is
+  // never a pass root (it writes gl_FragColor in main). Pass roots are
+  // emitted in topological order so a downstream pass that depends on an
+  // upstream pass renders AFTER the upstream — the renderer respects this
+  // by walking the returned `passes` array in order.
+  const passRootsSet = new Set();
+  const passRootsOrdered = [];
+  for (const nid of order){
+    const node = nodeById.get(nid);
+    if (!node || node.type === 'output') continue;
+    const def = NODE_TYPES[node.type];
+    if (def && def.passCache === 'live'){
+      passRootsSet.add(nid);
+      passRootsOrdered.push(nid);
+    }
+  }
+
+  // tmpCounter shared across all sub-compiles so generated names don't collide
+  const tmpCounterRef = { value: 0 };
+
+  // ---------- emit each cache pass ----------
+  const passes = [];               // { id, fs, samplerName, outputType, textureBindings }
+  const passSamplerName = (i) => `u_pass_${i}`;
+  // For each pass root, the GLSL var that the MAIN shader uses to refer
+  // to its output (the decoded sample). Built lazily during main emission.
+
+  for (let pi = 0; pi < passRootsOrdered.length; pi++){
+    const rootId = passRootsOrdered[pi];
+    const rootNode = nodeById.get(rootId);
+    const rootDef = NODE_TYPES[rootNode.type];
+    const rootOutputs = getNodeOutputs(rootNode);
+    if (!rootOutputs || rootOutputs.length === 0){
+      return { ok: false, error: `pass root ${rootDef.title} has no outputs` };
+    }
+    // v1: cache only the first output of each pass root.
+    const rootOutSpec = rootOutputs[0];
+    const rootOutName = rootOutSpec.name;
+    const rootOutType = rootOutSpec.type;
+
+    // Subgraph for this pass = all ancestors of rootId, stopping at OTHER
+    // pass roots (which become sampled-from-FBO inputs).
+    const subgraphIds = collectPassSubgraph(rootId, edgesByTo, passRootsSet, nodeById);
+
+    // Build externalRefs for upstream pass roots in this subgraph: each
+    // gets a decoded-texture-sample expression assigned to a tmp.
+    const externalRefs = new Map();
+    const upstreamPassDecls = [];
+    const upstreamPassSetup = [];
+    const upstreamPassIndices = [];
+    for (const upid of subgraphIds){
+      if (upid === rootId) continue;
+      if (!passRootsSet.has(upid)) continue;
+      // Find this upstream pass's index
+      const upIdx = passRootsOrdered.indexOf(upid);
+      if (upIdx < 0 || upIdx >= pi) continue; // shouldn't happen for ancestors
+      const upNode = nodeById.get(upid);
+      const upOutSpec = getNodeOutputs(upNode)[0];
+      const upTypeUnpack = upOutSpec.type === 'float' ? '_unpackPassFloat'
+                          : upOutSpec.type === 'vec2'  ? '_unpackPassVec2'
+                          : '_unpackPassVec3';
+      const tname = `_pi_${upid}_${upOutSpec.name}`;
+      upstreamPassDecls.push(`uniform sampler2D ${passSamplerName(upIdx)};`);
+      upstreamPassSetup.push(`${upOutSpec.type} ${tname} = ${upTypeUnpack}(texture2D(${passSamplerName(upIdx)}, v_uv));`);
+      upstreamPassIndices.push(upIdx);
+      externalRefs.set(upid, { [upOutSpec.name]: tname });
+    }
+
+    // Emit the subgraph body
+    const emit = emitNodes({
+      orderedIds: subgraphIds,
+      nodeById, edgesByTo,
+      externalRefs,
+      tmpCounterRef,
+    });
+    if (emit.error) return { ok: false, error: emit.error };
+
+    // Fetch the root's output ref, encode, write to gl_FragColor
+    const rootRefs = emit.outputRefs.get(rootId);
+    if (!rootRefs || !(rootOutName in rootRefs)){
+      return { ok: false, error: `pass root ${rootDef.title}: missing output ${rootOutName}` };
+    }
+    const rootRef = rootRefs[rootOutName];
+    const packCall = rootOutType === 'float' ? '_packPassFloat'
+                    : rootOutType === 'vec2'  ? '_packPassVec2'
+                    : '_packPassVec3';
+
+    const prelude = buildPrelude({
+      helpers: emit.helpers,
+      extensions: emit.extensions,
+      textureBindings: emit.textureBindings,
+      inlineFunctions: emit.inlineFunctions,
+      useAnalytic,
+      passInputDecls: upstreamPassDecls,
+    });
+
+    const passFs = `${prelude}
 void main(){
-${body.map(line => '  ' + line).join('\n')}
+${[...upstreamPassSetup, ...emit.body].map(l => '  ' + l).join('\n')}
+  gl_FragColor = ${packCall}(${rootRef});
 }
 `;
 
-  return { ok: true, fs, textureBindings };
+    passes.push({
+      index: pi,
+      rootNodeId: rootId,
+      fs: passFs,
+      samplerName: passSamplerName(pi),
+      outputType: rootOutType,
+      textureBindings: emit.textureBindings,
+      upstreamPassIndices,
+    });
+  }
+
+  // ---------- emit the main shader ----------
+  // Build externalRefs for main: every pass root gets a texture-sample stub.
+  const mainExternalRefs = new Map();
+  const mainPassInputDecls = [];
+  const mainPassInputSetup = [];
+  for (let pi = 0; pi < passRootsOrdered.length; pi++){
+    const rootId = passRootsOrdered[pi];
+    const rootNode = nodeById.get(rootId);
+    const rootOutSpec = getNodeOutputs(rootNode)[0];
+    const unpackCall = rootOutSpec.type === 'float' ? '_unpackPassFloat'
+                       : rootOutSpec.type === 'vec2'  ? '_unpackPassVec2'
+                       : '_unpackPassVec3';
+    const tname = `_pi_${rootId}_${rootOutSpec.name}`;
+    mainPassInputDecls.push(`uniform sampler2D ${passSamplerName(pi)};`);
+    mainPassInputSetup.push(`${rootOutSpec.type} ${tname} = ${unpackCall}(texture2D(${passSamplerName(pi)}, v_uv));`);
+    mainExternalRefs.set(rootId, { [rootOutSpec.name]: tname });
+  }
+
+  const mainEmit = emitNodes({
+    orderedIds: order,
+    nodeById, edgesByTo,
+    externalRefs: mainExternalRefs,
+    tmpCounterRef,
+  });
+  if (mainEmit.error) return { ok: false, error: mainEmit.error };
+
+  const mainPrelude = buildPrelude({
+    helpers: mainEmit.helpers,
+    extensions: mainEmit.extensions,
+    textureBindings: mainEmit.textureBindings,
+    inlineFunctions: mainEmit.inlineFunctions,
+    useAnalytic,
+    passInputDecls: mainPassInputDecls,
+  });
+
+  const fs = `${mainPrelude}
+void main(){
+${[...mainPassInputSetup, ...mainEmit.body].map(l => '  ' + l).join('\n')}
+}
+`;
+
+  return {
+    ok: true,
+    fs,
+    textureBindings: mainEmit.textureBindings,
+    passes,                       // [] when no cacheable nodes are reachable
+  };
 }

@@ -1251,6 +1251,11 @@ float ${sn} = sin(${a});`,
     } }),
   },
   marble: {
+    // Pass-cached: this node calls fbm three times internally (~12 snoise
+    // calls per pixel). Caching its single-float output to an RGBA8 FBO
+    // means the main pass spends one texture fetch instead. See compiler.js
+    // partition logic + renderer.js pass orchestration.
+    passCache: 'live',
     category:'Pattern', title:'Marble Pattern', desc:'warped FBM + veins',
     info:'Warped FBM threaded with periodic veins — looks like polished marble or oil stains. The `scale` parameter controls the macro pattern size. Plug Time into the time input for slow undulating animation. Pair with Mix to drag two colors through the vein field for the classic marble look.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
@@ -1594,6 +1599,9 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
     },
   },
   heightMap: {
+    // Pass-cached: 6 snoise calls per pixel (FBM-based heightfield).
+    // Single float output → cached to RGBA8 FBO and sampled in the main pass.
+    passCache: 'live',
     category:'Pattern', title:'Height Map', desc:'procedural FBM or static image',
     info:'Either a procedural FBM-based heightmap (mode=\'dynamic\') or a static image\'s R channel (mode=\'static\'). Use as the height field for Normal Map, Shadow, and Shadow Tex nodes to derive surface lighting from a heightfield.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
@@ -1627,6 +1635,9 @@ float ${h} = ${k} > 0.0001 ? clamp(0.5 + 0.5 * (${ctx.inputs.b} - ${ctx.inputs.a
     },
   },
   normalMap: {
+    // Pass-cached: 4 finite-difference height samples × 6 octaves of FBM
+    // = ~24 snoise calls per pixel. Cached vec3 normal sampled in main.
+    passCache: 'live',
     category:'Pattern', title:'Normal Map', desc:'procedural derivatives or static image',
     info:'Generates a tangent-space normal map. In dynamic mode, derives normals from procedural FBM via finite differences. In static mode, samples a normal-map image (assumes standard blue-purple encoding). Plug into Lambert as N for surface lighting.',
     inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],

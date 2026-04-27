@@ -85,6 +85,17 @@ const renderer = (() => {
   // uniform to a node id whose image we bind on the active texture slot.
   let textureBindings = [];
 
+  // ---- Plan B: cache passes ----
+  // Each entry: { program, fs, fbo, tex, fbW, fbH, common uniforms,
+  //   imageBindings: [{nodeId, uniformName, slot, location}],
+  //   upstreamSlots: [{srcPassIdx, slot, location}],
+  //   uMainSamplerLoc — set on the MAIN program for this pass's sampler }
+  let passes = [];
+  // Slot 16+ reserved for pass FBO textures; 0..7 for image textures;
+  // slot 15 for the noise atlas (set above). 16+N is safely under the
+  // typical 16-sampler limit for v1's 3 max passes.
+  const PASS_SLOT_BASE = 16;
+
   // Bloom pipeline — lazily used when the Output node's `bloom` param
   // is on. Created once for this context; FBOs internally (re)allocate
   // on viewport resize.
@@ -165,7 +176,49 @@ const renderer = (() => {
     return prog;
   }
 
-  function recompile(fsSource, bindings){
+  // Allocate an RGBA8 FBO + texture for one pass. Linear filter so the
+  // main shader sampling the pass output gets smooth interpolation; CLAMP
+  // wrap because v_uv is always in [0,1] for full-screen passes.
+  function createPassFBO(w, h){
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S,     gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T,     gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (status !== gl.FRAMEBUFFER_COMPLETE){
+      gl.deleteFramebuffer(fbo);
+      gl.deleteTexture(tex);
+      throw new Error('pass FBO incomplete: 0x' + status.toString(16));
+    }
+    return { tex, fbo, w, h };
+  }
+
+  function disposePass(p){
+    if (!p) return;
+    if (p.program) gl.deleteProgram(p.program);
+    if (p.fbo)     gl.deleteFramebuffer(p.fbo);
+    if (p.tex)     gl.deleteTexture(p.tex);
+  }
+
+  // Re-allocate every pass's FBO at a new (canvas) size — called from resize.
+  function resizePassFBOs(w, h){
+    for (const p of passes){
+      if (p.fbW === w && p.fbH === h) continue;
+      gl.deleteFramebuffer(p.fbo);
+      gl.deleteTexture(p.tex);
+      const fb = createPassFBO(w, h);
+      p.fbo = fb.fbo; p.tex = fb.tex; p.fbW = w; p.fbH = h;
+    }
+  }
+
+  function recompile(fsSource, bindings, passSpecs){
     try {
       const vs = compile(gl.VERTEX_SHADER, VS);
       const fs = compile(gl.FRAGMENT_SHADER, fsSource);
@@ -173,6 +226,11 @@ const renderer = (() => {
       if (program) gl.deleteProgram(program);
       program = prog;
       gl.useProgram(program);
+
+      // Tear down old passes — programs and FBOs both belong to the
+      // previous compile and aren't reused.
+      for (const p of passes) disposePass(p);
+      passes = [];
 
       // rebind attribs + index buffer for the new program
       const aPos = gl.getAttribLocation(program, 'a_position');
@@ -209,6 +267,68 @@ const renderer = (() => {
         if (b.location != null) gl.uniform1i(b.location, b.slot);
       }
 
+      // ---- compile each cache pass into its own program + FBO ----
+      for (const ps of (passSpecs || [])){
+        const pVs   = compile(gl.VERTEX_SHADER, VS);
+        const pFs   = compile(gl.FRAGMENT_SHADER, ps.fs);
+        const pProg = link(pVs, pFs);
+        gl.useProgram(pProg);
+
+        const pUTime     = gl.getUniformLocation(pProg, 'u_time');
+        const pUMouse    = gl.getUniformLocation(pProg, 'u_mouse');
+        const pURes      = gl.getUniformLocation(pProg, 'u_resolution');
+        const pUSimLight = gl.getUniformLocation(pProg, 'u_simLight');
+        const pUShadows  = gl.getUniformLocation(pProg, 'u_shadows');
+        const pUNoise    = gl.getUniformLocation(pProg, 'u_noise');
+        if (pUNoise != null) gl.uniform1i(pUNoise, NOISE_UNIT);
+
+        // Pass-internal image textures get their own slot space (0..N).
+        const passImageBindings = (ps.textureBindings || []).map((b, j) => ({
+          ...b,
+          slot: j,
+          location: gl.getUniformLocation(pProg, b.uniformName),
+        }));
+        for (const b of passImageBindings){
+          if (b.location != null) gl.uniform1i(b.location, b.slot);
+        }
+
+        // Upstream pass-output samplers — bound to PASS_SLOT_BASE + upIdx.
+        const upstreamSlots = (ps.upstreamPassIndices || []).map(upIdx => ({
+          srcPassIdx: upIdx,
+          slot: PASS_SLOT_BASE + upIdx,
+          location: gl.getUniformLocation(pProg, 'u_pass_' + upIdx),
+        }));
+        for (const u of upstreamSlots){
+          if (u.location != null) gl.uniform1i(u.location, u.slot);
+        }
+
+        const fb = createPassFBO(canvas.width, canvas.height);
+
+        passes.push({
+          index: ps.index,
+          program: pProg,
+          fbo: fb.fbo,
+          tex: fb.tex,
+          fbW: fb.w,
+          fbH: fb.h,
+          uTime: pUTime, uMouse: pUMouse, uRes: pURes,
+          uSimLight: pUSimLight, uShadows: pUShadows, uNoise: pUNoise,
+          imageBindings: passImageBindings,
+          upstreamSlots,
+        });
+      }
+
+      // Resolve MAIN program's pass-input sampler locations now that
+      // passes exist. Each MAIN program sampler `u_pass_N` reads the FBO
+      // texture of pass N at the corresponding slot.
+      gl.useProgram(program);
+      for (const p of passes){
+        const slot = PASS_SLOT_BASE + p.index;
+        const loc  = gl.getUniformLocation(program, 'u_pass_' + p.index);
+        p.uMainSamplerLoc = loc;
+        if (loc != null) gl.uniform1i(loc, slot);
+      }
+
       $('#shaderError').classList.remove('visible');
       $('#shaderError').textContent = '';
       return { ok: true };
@@ -227,6 +347,8 @@ const renderer = (() => {
       canvas.width = w;
       canvas.height = h;
       gl.viewport(0, 0, w, h);
+      // Pass FBOs must match canvas size so v_uv-based sampling lines up.
+      resizePassFBOs(w, h);
     }
   }
   resize();
@@ -255,6 +377,68 @@ const renderer = (() => {
         const outNode = state.nodes.find(n => n.type === 'output');
         const bloomOn = outNode && outNode.params && outNode.params.bloom === 'on';
         const bp = outNode && outNode.params || {};
+
+        // ---- shared dynamic uniforms (computed once per frame, used by
+        // every program — main and all passes) ----
+        const tNow = (performance.now() - start) / 1000;
+        const simOn = document.body.classList.contains('sim-lighting-on');
+        const aspect = canvas.width / canvas.height;
+        const slx = simOn ? (mx - 0.5) * aspect : 0.0;
+        const sly = simOn ? (my - 0.5)          : 0.0;
+        const slz = simOn ? 0.45                : 100.0;
+        const shadowsOn = document.body.classList.contains('shadows-on');
+        const shadowsVal = shadowsOn ? 1.0 : 0.0;
+
+        // ---- render every cache pass into its FBO ----
+        // Passes are in topological order (compiler emits them so), so an
+        // upstream pass always runs before any pass that samples it. Each
+        // pass renders the same fullscreen mesh as the main pass. Per-frame
+        // — no invalidation tracking in v1, but the per-fragment cost of
+        // each pass is bounded (only its own subgraph runs).
+        for (const p of passes){
+          gl.bindFramebuffer(gl.FRAMEBUFFER, p.fbo);
+          gl.viewport(0, 0, p.fbW, p.fbH);
+          gl.useProgram(p.program);
+          if (p.uTime)     gl.uniform1f(p.uTime, tNow);
+          if (p.uMouse)    gl.uniform2f(p.uMouse, mx, my);
+          if (p.uRes)      gl.uniform2f(p.uRes, p.fbW, p.fbH);
+          if (p.uSimLight) gl.uniform3f(p.uSimLight, slx, sly, slz);
+          if (p.uShadows)  gl.uniform1f(p.uShadows, shadowsVal);
+
+          if (p.uNoise != null && noiseBake){
+            gl.activeTexture(gl.TEXTURE0 + NOISE_UNIT);
+            gl.bindTexture(gl.TEXTURE_2D, noiseBake.texture);
+          }
+          for (const b of p.imageBindings){
+            gl.activeTexture(gl.TEXTURE0 + b.slot);
+            gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+          }
+          for (const u of p.upstreamSlots){
+            const src = passes.find(x => x.index === u.srcPassIdx);
+            if (src){
+              gl.activeTexture(gl.TEXTURE0 + u.slot);
+              gl.bindTexture(gl.TEXTURE_2D, src.tex);
+            }
+          }
+
+          // Re-bind attribs to the pass program — getAttribLocation per
+          // program returns its own slots; vertexAttribPointer is bound
+          // to whichever location we pull from this program.
+          gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+          const pAPos = gl.getAttribLocation(p.program, 'a_position');
+          gl.enableVertexAttribArray(pAPos);
+          gl.vertexAttribPointer(pAPos, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+          const pAUv = gl.getAttribLocation(p.program, 'a_uv');
+          gl.enableVertexAttribArray(pAUv);
+          gl.vertexAttribPointer(pAUv, 2, gl.FLOAT, false, 0, 0);
+          gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+          gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
+        }
+        // Restore the canvas-bound default framebuffer + viewport for the
+        // main pass / bloom pipeline that follows.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
 
         // shared scene-draw: bind user program, set uniforms + textures,
         // draw the fullscreen triangle pair. Used by both paths.
@@ -296,6 +480,13 @@ const renderer = (() => {
           for (const b of textureBindings){
             gl.activeTexture(gl.TEXTURE0 + b.slot);
             gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+          }
+          // Bind each cache-pass FBO texture to its reserved slot so the
+          // main shader's `texture2D(u_pass_N, v_uv)` lookups read the
+          // freshly-rendered pass output (rendered above this frame).
+          for (const p of passes){
+            gl.activeTexture(gl.TEXTURE0 + (PASS_SLOT_BASE + p.index));
+            gl.bindTexture(gl.TEXTURE_2D, p.tex);
           }
           // re-bind the user program's vertex attribs + index buffer in case
           // bloom passes (which use their own quad buffers) left them dangling
@@ -345,7 +536,7 @@ function scheduleRecompile(){
       $('#shaderError').textContent = 'Graph error: ' + res.error;
       return;
     }
-    renderer.recompile(res.fs, res.textureBindings);
+    renderer.recompile(res.fs, res.textureBindings, res.passes);
   }, 80);
 }
 
@@ -356,5 +547,5 @@ function recompileShader(){
     $('#shaderError').textContent = 'Graph error: ' + res.error;
     return;
   }
-  renderer.recompile(res.fs, res.textureBindings);
+  renderer.recompile(res.fs, res.textureBindings, res.passes);
 }
