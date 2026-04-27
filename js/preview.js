@@ -47,11 +47,19 @@ const PREVIEW = (() => {
   let gl = null;
   let program = null;
   let posBuf, uvBuf, idxBuf, indexCount = 0;
-  let uTime, uMouse, uRes, uSimLight, uShadows;
+  let uTime, uMouse, uRes, uSimLight, uShadows, uNoise;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
   let active = false;
+  // Preview has its own GL context, so it needs its own pre-baked noise
+  // atlas and its own cache-pass FBOs (textures aren't shareable across
+  // contexts). Same NOISE_UNIT / PASS_SLOT_BASE convention as renderer.js
+  // for code parity. See plan A (textured snoise) and plan B (FBO pass cache).
+  let noiseBake = null;
+  let passes = [];
+  const PREVIEW_NOISE_UNIT     = 15;
+  const PREVIEW_PASS_SLOT_BASE = 16;
   let texRegistry = null;        // lazy-created on first ensureGL()
   let textureBindings = [];      // { nodeId, uniformName, slot, location }
   let bloom = null;              // lazy-created bloom pipeline (shared across re-entries)
@@ -201,10 +209,53 @@ const PREVIEW = (() => {
     texRegistry = createTextureRegistry(gl);
     // Dedicated bloom pipeline for this context too — same reason.
     bloom = createBloomPipeline(gl);
+    // Bake the noise atlas for this context (plan A). Without this, every
+    // shader that uses the textured snoise() helper renders garbage in
+    // preview because u_noise reads from an unbound texture unit.
+    if (typeof buildNoiseTexture === 'function'){
+      noiseBake = buildNoiseTexture(gl, 512, 8);
+    }
     return true;
   }
 
-  function buildProgram(fsSource, bindings){
+  // ---- Plan B: pass FBO helpers (preview-context copies) ----
+  function createPassFBO(w, h){
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (status !== gl.FRAMEBUFFER_COMPLETE){
+      gl.deleteFramebuffer(fbo);
+      gl.deleteTexture(tex);
+      throw new Error('preview pass FBO incomplete: 0x' + status.toString(16));
+    }
+    return { tex, fbo, w, h };
+  }
+  function disposePass(p){
+    if (!p) return;
+    if (p.program) gl.deleteProgram(p.program);
+    if (p.fbo)     gl.deleteFramebuffer(p.fbo);
+    if (p.tex)     gl.deleteTexture(p.tex);
+  }
+  function resizePreviewPassFBOs(w, h){
+    for (const p of passes){
+      if (p.fbW === w && p.fbH === h) continue;
+      gl.deleteFramebuffer(p.fbo);
+      gl.deleteTexture(p.tex);
+      const fb = createPassFBO(w, h);
+      p.fbo = fb.fbo; p.tex = fb.tex; p.fbW = w; p.fbH = h;
+    }
+  }
+
+  function buildProgram(fsSource, bindings, passSpecs){
     const vs = compileShader(gl.VERTEX_SHADER, VS_SRC);
     const fs = compileShader(gl.FRAGMENT_SHADER, fsSource);
     if (!vs || !fs) return false;
@@ -237,6 +288,8 @@ const PREVIEW = (() => {
     uRes      = gl.getUniformLocation(program, 'u_resolution');
     uSimLight = gl.getUniformLocation(program, 'u_simLight');
     uShadows  = gl.getUniformLocation(program, 'u_shadows');
+    uNoise    = gl.getUniformLocation(program, 'u_noise');
+    if (uNoise != null) gl.uniform1i(uNoise, PREVIEW_NOISE_UNIT);
 
     // Same texture binding strategy as renderer.js — one uniform1i per slot
     // at link time, then just rebind the underlying texture in `frame()`.
@@ -247,6 +300,66 @@ const PREVIEW = (() => {
     }));
     for (const b of textureBindings){
       if (b.location != null) gl.uniform1i(b.location, b.slot);
+    }
+
+    // ---- compile each cache-pass shader for the preview context ----
+    // Tear down old passes first.
+    for (const p of passes) disposePass(p);
+    passes = [];
+    for (const ps of (passSpecs || [])){
+      const pVs   = compileShader(gl.VERTEX_SHADER, VS_SRC);
+      const pFs   = compileShader(gl.FRAGMENT_SHADER, ps.fs);
+      if (!pVs || !pFs){ console.error('[preview] pass shader compile failed (idx=' + ps.index + ')'); continue; }
+      const pProg = gl.createProgram();
+      gl.attachShader(pProg, pVs);
+      gl.attachShader(pProg, pFs);
+      gl.linkProgram(pProg);
+      if (!gl.getProgramParameter(pProg, gl.LINK_STATUS)){
+        console.error('[preview] pass link error (idx=' + ps.index + '):', gl.getProgramInfoLog(pProg));
+        continue;
+      }
+      gl.useProgram(pProg);
+      const pUTime     = gl.getUniformLocation(pProg, 'u_time');
+      const pUMouse    = gl.getUniformLocation(pProg, 'u_mouse');
+      const pURes      = gl.getUniformLocation(pProg, 'u_resolution');
+      const pUSimLight = gl.getUniformLocation(pProg, 'u_simLight');
+      const pUShadows  = gl.getUniformLocation(pProg, 'u_shadows');
+      const pUNoise    = gl.getUniformLocation(pProg, 'u_noise');
+      if (pUNoise != null) gl.uniform1i(pUNoise, PREVIEW_NOISE_UNIT);
+
+      const passImageBindings = (ps.textureBindings || []).map((b, j) => ({
+        ...b, slot: j, location: gl.getUniformLocation(pProg, b.uniformName),
+      }));
+      for (const b of passImageBindings){
+        if (b.location != null) gl.uniform1i(b.location, b.slot);
+      }
+      const upstreamSlots = (ps.upstreamPassIndices || []).map(upIdx => ({
+        srcPassIdx: upIdx,
+        slot: PREVIEW_PASS_SLOT_BASE + upIdx,
+        location: gl.getUniformLocation(pProg, 'u_pass_' + upIdx),
+      }));
+      for (const u of upstreamSlots){
+        if (u.location != null) gl.uniform1i(u.location, u.slot);
+      }
+      const fb = createPassFBO(faceCanvas.width, faceCanvas.height);
+      passes.push({
+        index: ps.index,
+        program: pProg,
+        fbo: fb.fbo, tex: fb.tex, fbW: fb.w, fbH: fb.h,
+        uTime: pUTime, uMouse: pUMouse, uRes: pURes,
+        uSimLight: pUSimLight, uShadows: pUShadows, uNoise: pUNoise,
+        imageBindings: passImageBindings,
+        upstreamSlots,
+      });
+    }
+
+    // Resolve MAIN program's pass-input sampler locations.
+    gl.useProgram(program);
+    for (const p of passes){
+      const slot = PREVIEW_PASS_SLOT_BASE + p.index;
+      const loc  = gl.getUniformLocation(program, 'u_pass_' + p.index);
+      p.uMainSamplerLoc = loc;
+      if (loc != null) gl.uniform1i(loc, slot);
     }
     return true;
   }
@@ -275,6 +388,8 @@ const PREVIEW = (() => {
     faceCanvas.width  = w;
     faceCanvas.height = h;
     gl.viewport(0, 0, w, h);
+    // Pass FBOs must follow the canvas size or v_uv-based sampling drifts.
+    resizePreviewPassFBOs(w, h);
   }
 
   /* Installs the ResizeObserver on `.face` once. Observer fires only on
@@ -300,6 +415,53 @@ const PREVIEW = (() => {
       const bloomOn = outNode && outNode.params && outNode.params.bloom === 'on';
       const bp = (outNode && outNode.params) || {};
 
+      // Hoisted dynamic uniforms — same values for all passes + main draw.
+      const tNow = (performance.now() - startTime) / 1000;
+      const simOn = document.body.classList.contains('sim-lighting-on');
+      const aspect = faceCanvas.width / faceCanvas.height;
+      const slx = simOn ? (shaderMX - 0.5) * aspect : 0.0;
+      const sly = simOn ? (shaderMY - 0.5)          : 0.0;
+      const slz = simOn ? 0.45                       : 100.0;
+
+      // ---- render every cache pass into its FBO before the main draw ----
+      for (const p of passes){
+        gl.bindFramebuffer(gl.FRAMEBUFFER, p.fbo);
+        gl.viewport(0, 0, p.fbW, p.fbH);
+        gl.useProgram(p.program);
+        if (p.uTime)     gl.uniform1f(p.uTime, tNow);
+        if (p.uMouse)    gl.uniform2f(p.uMouse, shaderMX, shaderMY);
+        if (p.uRes)      gl.uniform2f(p.uRes, p.fbW, p.fbH);
+        if (p.uSimLight) gl.uniform3f(p.uSimLight, slx, sly, slz);
+        if (p.uShadows)  gl.uniform1f(p.uShadows, 1.0); // shadows always on in preview
+        if (p.uNoise != null && noiseBake){
+          gl.activeTexture(gl.TEXTURE0 + PREVIEW_NOISE_UNIT);
+          gl.bindTexture(gl.TEXTURE_2D, noiseBake.texture);
+        }
+        for (const b of p.imageBindings){
+          gl.activeTexture(gl.TEXTURE0 + b.slot);
+          gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+        }
+        for (const u of p.upstreamSlots){
+          const src = passes.find(x => x.index === u.srcPassIdx);
+          if (src){
+            gl.activeTexture(gl.TEXTURE0 + u.slot);
+            gl.bindTexture(gl.TEXTURE_2D, src.tex);
+          }
+        }
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        const pAPos = gl.getAttribLocation(p.program, 'a_position');
+        gl.enableVertexAttribArray(pAPos);
+        gl.vertexAttribPointer(pAPos, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+        const pAUv = gl.getAttribLocation(p.program, 'a_uv');
+        gl.enableVertexAttribArray(pAUv);
+        gl.vertexAttribPointer(pAUv, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+        gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, faceCanvas.width, faceCanvas.height);
+
       const drawScene = () => {
         gl.useProgram(program);
         gl.uniform1f(uTime, (performance.now() - startTime) / 1000);
@@ -322,9 +484,21 @@ const PREVIEW = (() => {
         // (sim-lighting-on / shadows-on) doesn't apply here. The user said
         // they want shadows always-on whenever the preview card is shown.
         if (uShadows) gl.uniform1f(uShadows, 1.0);
+        // Bind the noise atlas (plan A) and each cache-pass FBO (plan B).
+        // Without these, every snoise() call and every pass-sampler reads
+        // garbage in the preview context, which is what made Fuzzy Blob
+        // render completely differently from the editor background.
+        if (uNoise != null && noiseBake){
+          gl.activeTexture(gl.TEXTURE0 + PREVIEW_NOISE_UNIT);
+          gl.bindTexture(gl.TEXTURE_2D, noiseBake.texture);
+        }
         for (const b of textureBindings){
           gl.activeTexture(gl.TEXTURE0 + b.slot);
           gl.bindTexture(gl.TEXTURE_2D, texRegistry.getTexture(b.nodeId));
+        }
+        for (const p of passes){
+          gl.activeTexture(gl.TEXTURE0 + (PREVIEW_PASS_SLOT_BASE + p.index));
+          gl.bindTexture(gl.TEXTURE_2D, p.tex);
         }
         // re-bind the program's attribs + index buffer — bloom passes use
         // their own quad buffers
@@ -491,7 +665,7 @@ const PREVIEW = (() => {
     if (ensureGL()){
       const res = compileGraph();
       if (res.ok){
-        buildProgram(res.fs, res.textureBindings);
+        buildProgram(res.fs, res.textureBindings, res.passes);
       } else {
         toast('shader compile error: ' + res.error, 'err');
       }
