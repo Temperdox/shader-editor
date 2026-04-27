@@ -177,10 +177,15 @@
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
-    // REPEAT wrap so any input UV samples cleanly; LINEAR filter so the
-    // noise stays smooth between texels.
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    // MIRRORED_REPEAT instead of REPEAT — the baked snoise field isn't
+    // periodic at the texture edges (analytic snoise is aperiodic), so
+    // plain REPEAT shows a visible seam line every `tileSize` units of
+    // input space. Mirroring reflects each tile at its boundary so the
+    // seam reads the same texel from both sides → no discontinuity.
+    // Effective period doubles to 2*tileSize; the mirror symmetry isn't
+    // visible in noise-like content.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     console.log(`[noise-bake] ${N}x${N} (tile=${tileSize}) in ${(performance.now()-t0).toFixed(1)}ms`);
