@@ -1689,6 +1689,186 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
     },
   },
 
+  /* ---- material maps (PBR-style) ---- */
+  // All of these mirror the heightMap/normalMap dynamic-vs-static toggle so
+  // a graph can either drop in real artist textures or substitute a
+  // procedural placeholder. Their outputs are designed to feed the PBR
+  // Material node (or be wired manually into existing math nodes).
+  aoMap: {
+    passCache: 'live',
+    category:'Pattern', title:'AO Map', desc:'procedural pseudo-AO or static image (R channel)',
+    info:'Ambient-occlusion mask. 1.0 = fully lit, 0.0 = fully occluded. Multiply into your final color (or feed PBR Material) to bake in crevice darkening. Static mode samples R channel of an image; dynamic mode darkens valleys of an FBM heightfield.',
+    inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
+    outputs:[{name:'ao', type:'float'}],
+    params:[
+      {name:'mode',     kind:'segmented', default:'dynamic', options:['dynamic','static']},
+      {name:'scale',    kind:'number', default:2.0, min:0.1, max:20, step:0.05,
+       visibleWhen:p => p.mode === 'dynamic'},
+      {name:'strength', kind:'number', default:1.0, min:0,   max:2,  step:0.05,
+       visibleWhen:p => p.mode === 'dynamic'},
+      {name:'imageUrl', kind:'image', default:'',
+       visibleWhen:p => p.mode === 'static'},
+    ],
+    generate:(ctx) => {
+      if (ctx.params.mode === 'static'){
+        if (!ctx.params.imageUrl){
+          return { exprs:{ ao: '1.0' } };
+        }
+        const uName = glslUniformName(ctx.node.id, 'ao');
+        return {
+          exprs:{ ao: `texture2D(${uName}, fract(${ctx.inputs.p})).r` },
+          textures:[{ uniformName: uName }],
+        };
+      }
+      const sc = glslNum(ctx.params.scale);
+      const st = glslNum(ctx.params.strength);
+      return {
+        exprs:{
+          ao: `clamp(1.0 - heightField(${ctx.inputs.p}, ${sc}, ${ctx.inputs.time}) * ${st}, 0.0, 1.0)`,
+        },
+        helpers:['snoise','fbm','heightField'],
+      };
+    },
+  },
+  edgeMap: {
+    passCache: 'live',
+    category:'Pattern', title:'Edge Map', desc:'rim/edge factor — image (R) or fresnel-style fallback',
+    info:'Edge/rim mask for stylized highlights and outlines. 1.0 = on an edge, 0.0 = facing the camera. Static mode samples R channel of an edge-detection image. Dynamic mode uses (1 - n.z) of the surface normal — a cheap fresnel-ish rim factor.',
+    inputs:[
+      {name:'p',      type:'vec2', default:[0,0]},
+      {name:'normal', type:'vec3', default:[0,0,1]},
+    ],
+    outputs:[{name:'edge', type:'float'}],
+    params:[
+      {name:'mode',     kind:'segmented', default:'dynamic', options:['dynamic','static']},
+      {name:'power',    kind:'number', default:2.0, min:0.5, max:8, step:0.1,
+       visibleWhen:p => p.mode === 'dynamic'},
+      {name:'imageUrl', kind:'image', default:'',
+       visibleWhen:p => p.mode === 'static'},
+    ],
+    generate:(ctx) => {
+      if (ctx.params.mode === 'static'){
+        if (!ctx.params.imageUrl){
+          return { exprs:{ edge: '0.0' } };
+        }
+        const uName = glslUniformName(ctx.node.id, 'eg');
+        return {
+          exprs:{ edge: `texture2D(${uName}, fract(${ctx.inputs.p})).r` },
+          textures:[{ uniformName: uName }],
+        };
+      }
+      const pw = glslNum(ctx.params.power);
+      return {
+        exprs:{
+          edge: `pow(clamp(1.0 - max(${ctx.inputs.normal}.z, 0.0), 0.0, 1.0), ${pw})`,
+        },
+      };
+    },
+  },
+  smoothnessMap: {
+    passCache: 'live',
+    category:'Pattern', title:'Smoothness Map', desc:'procedural FBM or static image (R channel)',
+    info:'Smoothness mask (a.k.a. inverse roughness). 1.0 = mirror-smooth (tight specular), 0.0 = matte (broad specular). Wire into PBR Material `smoothness`. Static mode samples R channel; dynamic mode uses an FBM heightfield (high crests = smoother).',
+    inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
+    outputs:[{name:'smoothness', type:'float'}],
+    params:[
+      {name:'mode',     kind:'segmented', default:'dynamic', options:['dynamic','static']},
+      {name:'scale',    kind:'number', default:2.0, min:0.1, max:20, step:0.05,
+       visibleWhen:p => p.mode === 'dynamic'},
+      {name:'imageUrl', kind:'image', default:'',
+       visibleWhen:p => p.mode === 'static'},
+    ],
+    generate:(ctx) => {
+      if (ctx.params.mode === 'static'){
+        if (!ctx.params.imageUrl){
+          return { exprs:{ smoothness: '0.5' } };
+        }
+        const uName = glslUniformName(ctx.node.id, 'sm');
+        return {
+          exprs:{ smoothness: `texture2D(${uName}, fract(${ctx.inputs.p})).r` },
+          textures:[{ uniformName: uName }],
+        };
+      }
+      const sc = glslNum(ctx.params.scale);
+      return {
+        exprs:{
+          smoothness: `clamp(heightField(${ctx.inputs.p}, ${sc}, ${ctx.inputs.time}), 0.0, 1.0)`,
+        },
+        helpers:['snoise','fbm','heightField'],
+      };
+    },
+  },
+  metallic: {
+    passCache: 'live',
+    category:'Pattern', title:'Metallic', desc:'metallic mask — static image, procedural, with optional invert',
+    info:'Metallic mask. White = full metallic (gets full environment reflection); black = dielectric (no env reflection). Tick "invert" to flip the mask so black portions become metallic. With no image loaded in static mode, behaves as fully white (everything is metallic).',
+    inputs:[{name:'p', type:'vec2', default:[0,0]}, {name:'time', type:'float', default:0}],
+    outputs:[{name:'metallic', type:'float'}],
+    params:[
+      {name:'mode',       kind:'segmented', default:'static', options:['dynamic','static']},
+      {name:'scale',      kind:'number', default:2.0, min:0.1, max:20, step:0.05,
+       visibleWhen:p => p.mode === 'dynamic'},
+      {name:'imageUrl',   kind:'image', default:'',
+       visibleWhen:p => p.mode === 'static'},
+      // Default white = "everything is metallic"; with invert ticked, black
+      // portions of the mask become the metallic regions instead.
+      {name:'invertMask', kind:'segmented', default:'no', options:['no','yes']},
+    ],
+    generate:(ctx) => {
+      const inv = ctx.params.invertMask === 'yes';
+      if (ctx.params.mode === 'static'){
+        if (!ctx.params.imageUrl){
+          // No image → "default white" (fully metallic). Invert flips to 0.
+          return { exprs:{ metallic: inv ? '0.0' : '1.0' } };
+        }
+        const uName = glslUniformName(ctx.node.id, 'mt');
+        const sample = `texture2D(${uName}, fract(${ctx.inputs.p})).r`;
+        return {
+          exprs:{ metallic: inv ? `(1.0 - ${sample})` : sample },
+          textures:[{ uniformName: uName }],
+        };
+      }
+      const sc = glslNum(ctx.params.scale);
+      const proc = `clamp(heightField(${ctx.inputs.p}, ${sc}, ${ctx.inputs.time}), 0.0, 1.0)`;
+      return {
+        exprs:{ metallic: inv ? `(1.0 - ${proc})` : proc },
+        helpers:['snoise','fbm','heightField'],
+      };
+    },
+  },
+  environment: {
+    category:'Pattern', title:'Environment', desc:'matcap-style environment lookup for metallic surfaces',
+    info:'Samples an environment image as a matcap (Material Capture). The input normal is mapped to UV via `normal.xy * 0.5 + 0.5`, so the image is treated as a "lit sphere" lookup. Output is gated by the global Reflections button — returns vec3(0) when reflections are off so it has zero cost on the shader downstream.',
+    inputs:[{name:'normal', type:'vec3', default:[0,0,1]}],
+    outputs:[{name:'color', type:'vec3'}],
+    params:[
+      {name:'imageUrl',  kind:'image',  default:''},
+      {name:'intensity', kind:'number', default:1.0, min:0, max:4, step:0.05},
+    ],
+    generate:(ctx) => {
+      const intensity = glslNum(ctx.params.intensity);
+      if (!ctx.params.imageUrl){
+        return { exprs:{ color: 'vec3(0.0)' } };
+      }
+      const uName = glslUniformName(ctx.node.id, 'env');
+      const n = ctx.tmp('envN');
+      const uv = ctx.tmp('envUv');
+      return {
+        // Normalize the input normal in case the user wired in something
+        // non-unit-length, then matcap-project to UV space. Multiplied by
+        // u_reflections so the global Reflections toggle short-circuits the
+        // texture sample's contribution to zero.
+        setup:
+`vec3 ${n} = normalize(${ctx.inputs.normal});
+vec2 ${uv} = ${n}.xy * 0.5 + 0.5;`,
+        exprs:{
+          color: `(texture2D(${uName}, ${uv}).rgb * ${intensity} * u_reflections)`,
+        },
+        textures:[{ uniformName: uName }],
+      };
+    },
+  },
+
   /* ---- effects ---- */
   posterize: {
     category:'Effect', title:'Posterize', desc:'quantize each color channel to N levels',
@@ -2112,6 +2292,100 @@ if (u_shadows > 0.5) {
   }
 }`,
         exprs:{ out: result },
+      };
+    },
+  },
+  pbrMaterial: {
+    category:'Effect', title:'PBR Material', desc:'lit material: albedo + normal + ao + smoothness + metallic + env + edge',
+    info:'Single-node material composite. Internally: ambient + lambert diffuse (× AO × shadow) + Blinn-Phong specular (sized by smoothness) + Fresnel-weighted environment reflection (gated by metallic and the global Reflections toggle) + edge rim. Wire all the maps and a sim-light direction, get a final color and a specular mask for bloom.',
+    inputs:[
+      // Wire albedo (Color/Texture rgb), then the supporting maps. Anything
+      // unconnected falls back to a neutral value so the node degrades to a
+      // simple lambert + small spec while you wire things in piecewise.
+      {name:'albedo',      type:'vec3',  default:[0.7, 0.7, 0.7]},
+      {name:'normal',      type:'vec3',  default:[0, 0, 1]},
+      {name:'ao',          type:'float', default:1.0},
+      {name:'smoothness',  type:'float', default:0.5},
+      {name:'metallic',    type:'float', default:0.0},
+      // Environment is expected to come from the Environment node, which
+      // already gates itself by u_reflections — so this branch is free when
+      // reflections are off.
+      {name:'environment', type:'vec3',  default:[0, 0, 0]},
+      {name:'edge',        type:'float', default:0.0},
+      // Optional shadow factor (0 = fully shadowed, 1 = lit). Wire from the
+      // Shadow / Shadow Tex node; defaults to 1 so the material stays lit
+      // when no shadow node is present.
+      {name:'shadow',      type:'float', default:1.0},
+      // Per-fragment surface position for point-light direction (wire
+      // Centered UV's `p` here). Leave unconnected for a directional-light
+      // approximation.
+      {name:'pos',         type:'vec2',  default:[0, 0]},
+    ],
+    outputs:[
+      {name:'color',    type:'vec3'},
+      {name:'specular', type:'float'},
+    ],
+    generate:(ctx) => {
+      const N      = ctx.tmp('pbrN');
+      const V      = ctx.tmp('pbrV');
+      const L      = ctx.tmp('pbrL');
+      const H      = ctx.tmp('pbrH');
+      const NdotL  = ctx.tmp('pbrNdL');
+      const NdotV  = ctx.tmp('pbrNdV');
+      const NdotH  = ctx.tmp('pbrNdH');
+      const specP  = ctx.tmp('pbrSpP');
+      const spec   = ctx.tmp('pbrSpec');
+      const F0     = ctx.tmp('pbrF0');
+      const fres   = ctx.tmp('pbrFr');
+      const amb    = ctx.tmp('pbrAmb');
+      const dif    = ctx.tmp('pbrDif');
+      const specC  = ctx.tmp('pbrSpC');
+      const envT   = ctx.tmp('pbrEnvT');
+      const envC   = ctx.tmp('pbrEnvC');
+      const edgeC  = ctx.tmp('pbrEdgeC');
+      const colorV = ctx.tmp('pbrCol');
+      const specM  = ctx.tmp('pbrSpM');
+      return {
+        setup:
+`vec3 ${N} = normalize(${ctx.inputs.normal});
+vec3 ${V} = vec3(0.0, 0.0, 1.0);
+vec3 ${L} = normalize(u_simLight - vec3(${ctx.inputs.pos}, 0.0));
+vec3 ${H} = normalize(${L} + ${V});
+float ${NdotL} = max(0.0, dot(${N}, ${L}));
+float ${NdotV} = max(0.0, dot(${N}, ${V}));
+float ${NdotH} = max(0.0, dot(${N}, ${H}));
+// Blinn-Phong exponent curve: smoothness^2 maps 0..1 → exp 8..256.
+float ${specP} = mix(8.0, 256.0, ${ctx.inputs.smoothness} * ${ctx.inputs.smoothness});
+float ${spec}  = pow(${NdotH}, ${specP});
+// Schlick Fresnel; F0 lerps from 0.04 (dielectrics) to 0.85 (metals).
+float ${F0}   = mix(0.04, 0.85, ${ctx.inputs.metallic});
+float ${fres} = ${F0} + (1.0 - ${F0}) * pow(1.0 - ${NdotV}, 5.0);
+// Diffuse + ambient floor (so back-facing fragments aren't pitch black).
+// Both terms get AO and the optional shadow factor mixed in.
+vec3 ${amb} = ${ctx.inputs.albedo} * 0.18 * ${ctx.inputs.ao};
+vec3 ${dif} = ${ctx.inputs.albedo} * ${NdotL} * ${ctx.inputs.ao} * ${ctx.inputs.shadow};
+// Specular: dielectrics get a white spec, metals get tinted spec (energy-
+// conserving-ish — metals don't have a separate diffuse contribution).
+vec3 ${specC} = mix(vec3(${spec}) * ${ctx.inputs.smoothness},
+                    ${ctx.inputs.albedo} * ${spec} * ${ctx.inputs.smoothness} * 1.5,
+                    ${ctx.inputs.metallic});
+// Environment: tinted by albedo for metals, neutral for dielectrics. The
+// metallic branch saturates with smoothness; the dielectric branch is
+// fresnel-weighted (only edges reflect for non-metals).
+vec3 ${envT} = mix(${ctx.inputs.environment},
+                   ${ctx.inputs.environment} * ${ctx.inputs.albedo},
+                   ${ctx.inputs.metallic});
+vec3 ${envC} = ${envT} * mix(${fres} * ${ctx.inputs.smoothness} * 0.5,
+                             ${ctx.inputs.smoothness},
+                             ${ctx.inputs.metallic});
+// Edge rim — additive on top of the lit material.
+vec3 ${edgeC} = vec3(${ctx.inputs.edge}) * 0.6;
+vec3 ${colorV} = ${amb} + ${dif} + ${specC} + ${envC} + ${edgeC};
+// Specular mask drives bloom — bright on smooth/metallic/edge fragments.
+float ${specM} = clamp(${spec} * ${ctx.inputs.smoothness}
+                       + ${ctx.inputs.edge} * 0.5
+                       + ${fres} * ${ctx.inputs.metallic}, 0.0, 1.0);`,
+        exprs:{ color: colorV, specular: specM },
       };
     },
   },

@@ -203,6 +203,7 @@ uniform vec2  u_mouse;
 uniform vec2  u_resolution;
 uniform vec3  u_simLight;
 uniform float u_shadows;
+uniform float u_reflections;
 varying vec3  v_surfaceNormal;
 ${samplerDecls}
 varying vec2  v_uv;

@@ -105,6 +105,14 @@
     </svg>
     <span class="shadows-label">Shadows</span>
   </button>
+  <button class="save-fab" id="reflectionsBtn" type="button" title="Environment reflections on metallic surfaces">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 12c4-6 14-6 18 0"></path>
+      <path d="M3 12c4 6 14 6 18 0"></path>
+      <ellipse cx="12" cy="12" rx="3" ry="6"></ellipse>
+    </svg>
+    <span class="reflections-label">Reflections</span>
+  </button>
   <button class="save-fab" id="saveBtn" type="button">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -385,6 +393,14 @@
   </button>
 
   <div class="preview-fab-group">
+    <button class="preview-fab" id="previewReflectionsBtn" type="button" title="Environment reflections on metallic surfaces">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 12c4-6 14-6 18 0"></path>
+        <path d="M3 12c4 6 14 6 18 0"></path>
+        <ellipse cx="12" cy="12" rx="3" ry="6"></ellipse>
+      </svg>
+      <span class="preview-reflections-label">Reflections</span>
+    </button>
     <button class="preview-fab" id="previewSaveVideoBtn" type="button" title="Record the card face to MP4 (or WebM if unsupported)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polygon points="23 7 16 12 23 17 23 7"></polygon>
@@ -416,21 +432,21 @@
 <!-- Scripts are classic (not modules) so the page can be opened directly from
      the filesystem without a dev server. Load order matters: helpers → node
      types → state → compiler → renderer → editor → interactions → main. -->
-<script src="js/helpers.js?v=13"></script>
-<script src="js/node-types.js?v=13"></script>
-<script src="js/graph-state.js?v=13"></script>
-<script src="js/compiler.js?v=13"></script>
-<script src="js/textures.js?v=13"></script>
-<script src="js/bloom.js?v=13"></script>
-<script src="js/noise-bake.js?v=13"></script>
-<script src="js/renderer.js?v=13"></script>
-<script src="js/editor.js?v=13"></script>
-<script src="js/interactions.js?v=13"></script>
-<script src="js/templates/baked-graphs.js?v=14"></script>
-<script src="js/templates.js?v=13"></script>
-<script src="js/persistence.js?v=13"></script>
-<script src="js/preview.js?v=15"></script>
-<script src="js/main.js?v=15"></script>
+<script src="js/helpers.js?v=16"></script>
+<script src="js/node-types.js?v=16"></script>
+<script src="js/graph-state.js?v=16"></script>
+<script src="js/compiler.js?v=16"></script>
+<script src="js/textures.js?v=16"></script>
+<script src="js/bloom.js?v=16"></script>
+<script src="js/noise-bake.js?v=16"></script>
+<script src="js/renderer.js?v=16"></script>
+<script src="js/editor.js?v=16"></script>
+<script src="js/interactions.js?v=16"></script>
+<script src="js/templates/baked-graphs.js?v=16"></script>
+<script src="js/templates.js?v=16"></script>
+<script src="js/persistence.js?v=16"></script>
+<script src="js/preview.js?v=16"></script>
+<script src="js/main.js?v=16"></script>
 
 </body>
 </html>

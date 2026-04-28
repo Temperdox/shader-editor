@@ -75,7 +75,7 @@ const renderer = (() => {
   `;
 
   let program = null;
-  let uTime, uMouse, uRes, uSimLight, uShadows;
+  let uTime, uMouse, uRes, uSimLight, uShadows, uReflections;
   let mx = 0.5, my = 0.5;
 
   // Texture registry bound to this GL context. One per renderer so each
@@ -244,11 +244,12 @@ const renderer = (() => {
       gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
 
-      uTime     = gl.getUniformLocation(program, 'u_time');
-      uMouse    = gl.getUniformLocation(program, 'u_mouse');
-      uRes      = gl.getUniformLocation(program, 'u_resolution');
-      uSimLight = gl.getUniformLocation(program, 'u_simLight');
-      uShadows  = gl.getUniformLocation(program, 'u_shadows');
+      uTime        = gl.getUniformLocation(program, 'u_time');
+      uMouse       = gl.getUniformLocation(program, 'u_mouse');
+      uRes         = gl.getUniformLocation(program, 'u_resolution');
+      uSimLight    = gl.getUniformLocation(program, 'u_simLight');
+      uShadows     = gl.getUniformLocation(program, 'u_shadows');
+      uReflections = gl.getUniformLocation(program, 'u_reflections');
       // Noise sampler — only present when the compiled shader actually
       // references the textured snoise helper. getUniformLocation returns
       // null otherwise; bind code below short-circuits on null.
@@ -274,12 +275,13 @@ const renderer = (() => {
         const pProg = link(pVs, pFs);
         gl.useProgram(pProg);
 
-        const pUTime     = gl.getUniformLocation(pProg, 'u_time');
-        const pUMouse    = gl.getUniformLocation(pProg, 'u_mouse');
-        const pURes      = gl.getUniformLocation(pProg, 'u_resolution');
-        const pUSimLight = gl.getUniformLocation(pProg, 'u_simLight');
-        const pUShadows  = gl.getUniformLocation(pProg, 'u_shadows');
-        const pUNoise    = gl.getUniformLocation(pProg, 'u_noise');
+        const pUTime        = gl.getUniformLocation(pProg, 'u_time');
+        const pUMouse       = gl.getUniformLocation(pProg, 'u_mouse');
+        const pURes         = gl.getUniformLocation(pProg, 'u_resolution');
+        const pUSimLight    = gl.getUniformLocation(pProg, 'u_simLight');
+        const pUShadows     = gl.getUniformLocation(pProg, 'u_shadows');
+        const pUReflections = gl.getUniformLocation(pProg, 'u_reflections');
+        const pUNoise       = gl.getUniformLocation(pProg, 'u_noise');
         if (pUNoise != null) gl.uniform1i(pUNoise, NOISE_UNIT);
 
         // Pass-internal image textures get their own slot space (0..N).
@@ -312,7 +314,8 @@ const renderer = (() => {
           fbW: fb.w,
           fbH: fb.h,
           uTime: pUTime, uMouse: pUMouse, uRes: pURes,
-          uSimLight: pUSimLight, uShadows: pUShadows, uNoise: pUNoise,
+          uSimLight: pUSimLight, uShadows: pUShadows, uReflections: pUReflections,
+          uNoise: pUNoise,
           imageBindings: passImageBindings,
           upstreamSlots,
         });
@@ -388,6 +391,8 @@ const renderer = (() => {
         const slz = simOn ? 0.45                : 100.0;
         const shadowsOn = document.body.classList.contains('shadows-on');
         const shadowsVal = shadowsOn ? 1.0 : 0.0;
+        const reflectionsOn = document.body.classList.contains('reflections-on');
+        const reflectionsVal = reflectionsOn ? 1.0 : 0.0;
 
         // ---- render every cache pass into its FBO ----
         // Passes are in topological order (compiler emits them so), so an
@@ -402,8 +407,9 @@ const renderer = (() => {
           if (p.uTime)     gl.uniform1f(p.uTime, tNow);
           if (p.uMouse)    gl.uniform2f(p.uMouse, mx, my);
           if (p.uRes)      gl.uniform2f(p.uRes, p.fbW, p.fbH);
-          if (p.uSimLight) gl.uniform3f(p.uSimLight, slx, sly, slz);
-          if (p.uShadows)  gl.uniform1f(p.uShadows, shadowsVal);
+          if (p.uSimLight)    gl.uniform3f(p.uSimLight, slx, sly, slz);
+          if (p.uShadows)     gl.uniform1f(p.uShadows, shadowsVal);
+          if (p.uReflections) gl.uniform1f(p.uReflections, reflectionsVal);
 
           if (p.uNoise != null && noiseBake){
             gl.activeTexture(gl.TEXTURE0 + NOISE_UNIT);
@@ -470,6 +476,10 @@ const renderer = (() => {
           // returns 1.0 (no shadow). Preview always sets this to 1.0.
           const shadowsOn = document.body.classList.contains('shadows-on');
           if (uShadows) gl.uniform1f(uShadows, shadowsOn ? 1.0 : 0.0);
+          // Reflections toggle — Environment node returns vec3(0) when this
+          // is < 0.5, and PBR Material short-circuits its env-mix branch.
+          const reflectionsOn = document.body.classList.contains('reflections-on');
+          if (uReflections) gl.uniform1f(uReflections, reflectionsOn ? 1.0 : 0.0);
           // Bind the pre-baked noise atlas to its reserved unit. Cheap;
           // skip if the bake isn't available or the shader doesn't sample
           // it (uNoise == null when the program doesn't reference it).

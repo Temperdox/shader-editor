@@ -89,6 +89,18 @@ $('#shadowsBtn').addEventListener('click', () => {
   btn.classList.toggle('active', on);
 });
 
+// Reflections — toggles `body.reflections-on`. The renderer writes
+// u_reflections (1.0 / 0.0) each frame. The Environment node short-circuits
+// to vec3(0) when off; the PBR Material node skips its environment-mix
+// branch. Preview has its own button that toggles the same body class.
+$('#reflectionsBtn').addEventListener('click', () => {
+  const on = document.body.classList.toggle('reflections-on');
+  const btn = $('#reflectionsBtn');
+  const label = btn.querySelector('.reflections-label');
+  if (label) label.textContent = on ? 'On' : 'Reflections';
+  btn.classList.toggle('active', on);
+});
+
 // Lightbulb cursor follower — only visible when sim-lighting is on AND the
 // cursor is over the bare shader background (not over the editor UI, not
 // over the preview card). When over UI / in preview, the native cursor is

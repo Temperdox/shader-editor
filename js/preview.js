@@ -47,7 +47,7 @@ const PREVIEW = (() => {
   let gl = null;
   let program = null;
   let posBuf, uvBuf, idxBuf, indexCount = 0;
-  let uTime, uMouse, uRes, uSimLight, uShadows, uNoise;
+  let uTime, uMouse, uRes, uSimLight, uShadows, uReflections, uNoise;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
@@ -283,12 +283,13 @@ const PREVIEW = (() => {
     gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
 
-    uTime     = gl.getUniformLocation(program, 'u_time');
-    uMouse    = gl.getUniformLocation(program, 'u_mouse');
-    uRes      = gl.getUniformLocation(program, 'u_resolution');
-    uSimLight = gl.getUniformLocation(program, 'u_simLight');
-    uShadows  = gl.getUniformLocation(program, 'u_shadows');
-    uNoise    = gl.getUniformLocation(program, 'u_noise');
+    uTime        = gl.getUniformLocation(program, 'u_time');
+    uMouse       = gl.getUniformLocation(program, 'u_mouse');
+    uRes         = gl.getUniformLocation(program, 'u_resolution');
+    uSimLight    = gl.getUniformLocation(program, 'u_simLight');
+    uShadows     = gl.getUniformLocation(program, 'u_shadows');
+    uReflections = gl.getUniformLocation(program, 'u_reflections');
+    uNoise       = gl.getUniformLocation(program, 'u_noise');
     if (uNoise != null) gl.uniform1i(uNoise, PREVIEW_NOISE_UNIT);
 
     // Same texture binding strategy as renderer.js — one uniform1i per slot
@@ -319,12 +320,13 @@ const PREVIEW = (() => {
         continue;
       }
       gl.useProgram(pProg);
-      const pUTime     = gl.getUniformLocation(pProg, 'u_time');
-      const pUMouse    = gl.getUniformLocation(pProg, 'u_mouse');
-      const pURes      = gl.getUniformLocation(pProg, 'u_resolution');
-      const pUSimLight = gl.getUniformLocation(pProg, 'u_simLight');
-      const pUShadows  = gl.getUniformLocation(pProg, 'u_shadows');
-      const pUNoise    = gl.getUniformLocation(pProg, 'u_noise');
+      const pUTime        = gl.getUniformLocation(pProg, 'u_time');
+      const pUMouse       = gl.getUniformLocation(pProg, 'u_mouse');
+      const pURes         = gl.getUniformLocation(pProg, 'u_resolution');
+      const pUSimLight    = gl.getUniformLocation(pProg, 'u_simLight');
+      const pUShadows     = gl.getUniformLocation(pProg, 'u_shadows');
+      const pUReflections = gl.getUniformLocation(pProg, 'u_reflections');
+      const pUNoise       = gl.getUniformLocation(pProg, 'u_noise');
       if (pUNoise != null) gl.uniform1i(pUNoise, PREVIEW_NOISE_UNIT);
 
       const passImageBindings = (ps.textureBindings || []).map((b, j) => ({
@@ -347,7 +349,8 @@ const PREVIEW = (() => {
         program: pProg,
         fbo: fb.fbo, tex: fb.tex, fbW: fb.w, fbH: fb.h,
         uTime: pUTime, uMouse: pUMouse, uRes: pURes,
-        uSimLight: pUSimLight, uShadows: pUShadows, uNoise: pUNoise,
+        uSimLight: pUSimLight, uShadows: pUShadows, uReflections: pUReflections,
+        uNoise: pUNoise,
         imageBindings: passImageBindings,
         upstreamSlots,
       });
@@ -432,7 +435,10 @@ const PREVIEW = (() => {
         if (p.uMouse)    gl.uniform2f(p.uMouse, shaderMX, shaderMY);
         if (p.uRes)      gl.uniform2f(p.uRes, p.fbW, p.fbH);
         if (p.uSimLight) gl.uniform3f(p.uSimLight, slx, sly, slz);
-        if (p.uShadows)  gl.uniform1f(p.uShadows, 1.0); // shadows always on in preview
+        if (p.uShadows)     gl.uniform1f(p.uShadows, 1.0); // shadows always on in preview
+        // Reflections follow the body class (driven by either the editor's
+        // Reflections fab or the preview's own Reflections fab).
+        if (p.uReflections) gl.uniform1f(p.uReflections, document.body.classList.contains('reflections-on') ? 1.0 : 0.0);
         if (p.uNoise != null && noiseBake){
           gl.activeTexture(gl.TEXTURE0 + PREVIEW_NOISE_UNIT);
           gl.bindTexture(gl.TEXTURE_2D, noiseBake.texture);
@@ -484,6 +490,9 @@ const PREVIEW = (() => {
         // (sim-lighting-on / shadows-on) doesn't apply here. The user said
         // they want shadows always-on whenever the preview card is shown.
         if (uShadows) gl.uniform1f(uShadows, 1.0);
+        // Reflections — driven by `body.reflections-on` (toggled by either
+        // the editor's #reflectionsBtn or the preview's #previewReflectionsBtn).
+        if (uReflections) gl.uniform1f(uReflections, document.body.classList.contains('reflections-on') ? 1.0 : 0.0);
         // Bind the noise atlas (plan A) and each cache-pass FBO (plan B).
         // Without these, every snoise() call and every pass-sampler reads
         // garbage in the preview context, which is what made Fuzzy Blob
@@ -666,6 +675,7 @@ const PREVIEW = (() => {
     previewRoot.classList.remove('content-hidden');
     const hideLabel = document.querySelector('#previewHideContentBtn .preview-hide-label');
     if (hideLabel) hideLabel.textContent = 'Hide';
+    syncReflectionsBtn();
 
     if (ensureGL()){
       const res = compileGraph();
@@ -748,6 +758,24 @@ const PREVIEW = (() => {
       const hidden = previewRoot.classList.toggle('content-hidden');
       const label = hideContentBtn.querySelector('.preview-hide-label');
       if (label) label.textContent = hidden ? 'Show' : 'Hide';
+    });
+  }
+
+  // Reflections — toggles the same body.reflections-on class the editor's
+  // #reflectionsBtn toggles, so both buttons agree on a single source of
+  // truth. Label/active state is synced on preview enter.
+  const reflectionsBtn = $('#previewReflectionsBtn');
+  function syncReflectionsBtn(){
+    if (!reflectionsBtn) return;
+    const on = document.body.classList.contains('reflections-on');
+    const label = reflectionsBtn.querySelector('.preview-reflections-label');
+    if (label) label.textContent = on ? 'On' : 'Reflections';
+    reflectionsBtn.classList.toggle('active', on);
+  }
+  if (reflectionsBtn){
+    reflectionsBtn.addEventListener('click', () => {
+      document.body.classList.toggle('reflections-on');
+      syncReflectionsBtn();
     });
   }
 
