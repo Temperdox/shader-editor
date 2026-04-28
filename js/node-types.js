@@ -1844,15 +1844,22 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
     params:[
       {name:'imageUrl',  kind:'image',  default:''},
       {name:'intensity', kind:'number', default:1.0, min:0, max:4, step:0.05},
+      // Most matcaps are painted with image-Y-up (highlight at the top of
+      // the sphere), but after the texture upload's Y flip the lit hemisphere
+      // ends up at v=0. Toggling this flips the V coordinate so the lit side
+      // tracks the surface normal's +Y again.
+      {name:'flipY',     kind:'segmented', default:'yes', options:['no','yes']},
     ],
     generate:(ctx) => {
-      const intensity = glslNum(ctx.params.intensity);
+      const intensity = glslNum(ctx.params.intensity ?? 1.0);
       if (!ctx.params.imageUrl){
         return { exprs:{ color: 'vec3(0.0)' } };
       }
       const uName = glslUniformName(ctx.node.id, 'env');
-      const n = ctx.tmp('envN');
+      const n  = ctx.tmp('envN');
       const uv = ctx.tmp('envUv');
+      const flipY = (ctx.params.flipY ?? 'yes') === 'yes';
+      const vExpr = flipY ? `1.0 - (${n}.y * 0.5 + 0.5)` : `${n}.y * 0.5 + 0.5`;
       return {
         // Normalize the input normal in case the user wired in something
         // non-unit-length, then matcap-project to UV space. Multiplied by
@@ -1860,7 +1867,7 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
         // texture sample's contribution to zero.
         setup:
 `vec3 ${n} = normalize(${ctx.inputs.normal});
-vec2 ${uv} = ${n}.xy * 0.5 + 0.5;`,
+vec2 ${uv} = vec2(${n}.x * 0.5 + 0.5, ${vExpr});`,
         exprs:{
           color: `(texture2D(${uName}, ${uv}).rgb * ${intensity} * u_reflections)`,
         },
