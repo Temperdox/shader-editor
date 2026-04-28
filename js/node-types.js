@@ -2297,33 +2297,29 @@ if (u_shadows > 0.5) {
   },
   pbrMaterial: {
     category:'Effect', title:'PBR Material', desc:'lit material: albedo + normal + ao + smoothness + metallic + env + edge',
-    info:'Single-node material composite. Internally: ambient + lambert diffuse (× AO × shadow) + Blinn-Phong specular (sized by smoothness) + Fresnel-weighted environment reflection (gated by metallic and the global Reflections toggle) + edge rim. Wire all the maps and a sim-light direction, get a final color and a specular mask for bloom.',
+    info:'Single-node material composite. Diffuse + Blinn-Phong specular + metallic-driven environment reflection (mirror at metallic=1) + edge rim. All additive terms are gated by a `presence` mask derived from albedo brightness and metallic, so areas where albedo is black AND metallic is 0 stay pure black — the maps act like masks rather than blanket modifiers. Diffuse is killed for full metals (energy split). Wire albedo, the maps, and (optionally) a Shadow node and Centered UV for point-light positioning.',
     inputs:[
-      // Wire albedo (Color/Texture rgb), then the supporting maps. Anything
-      // unconnected falls back to a neutral value so the node degrades to a
-      // simple lambert + small spec while you wire things in piecewise.
       {name:'albedo',      type:'vec3',  default:[0.7, 0.7, 0.7]},
       {name:'normal',      type:'vec3',  default:[0, 0, 1]},
       {name:'ao',          type:'float', default:1.0},
       {name:'smoothness',  type:'float', default:0.5},
       {name:'metallic',    type:'float', default:0.0},
-      // Environment is expected to come from the Environment node, which
-      // already gates itself by u_reflections — so this branch is free when
-      // reflections are off.
       {name:'environment', type:'vec3',  default:[0, 0, 0]},
       {name:'edge',        type:'float', default:0.0},
-      // Optional shadow factor (0 = fully shadowed, 1 = lit). Wire from the
-      // Shadow / Shadow Tex node; defaults to 1 so the material stays lit
-      // when no shadow node is present.
       {name:'shadow',      type:'float', default:1.0},
-      // Per-fragment surface position for point-light direction (wire
-      // Centered UV's `p` here). Leave unconnected for a directional-light
-      // approximation.
       {name:'pos',         type:'vec2',  default:[0, 0]},
     ],
     outputs:[
       {name:'color',    type:'vec3'},
       {name:'specular', type:'float'},
+    ],
+    params:[
+      // User-tunable strength knobs so the same shader can be turned up/down
+      // without re-wiring math nodes.
+      {name:'envStrength',   kind:'number', default:1.2, min:0, max:4, step:0.05},
+      {name:'specStrength',  kind:'number', default:0.6, min:0, max:3, step:0.05},
+      {name:'edgeStrength',  kind:'number', default:0.4, min:0, max:2, step:0.05},
+      {name:'ambient',       kind:'number', default:0.15, min:0, max:0.5, step:0.01},
     ],
     generate:(ctx) => {
       const N      = ctx.tmp('pbrN');
@@ -2334,17 +2330,25 @@ if (u_shadows > 0.5) {
       const NdotV  = ctx.tmp('pbrNdV');
       const NdotH  = ctx.tmp('pbrNdH');
       const specP  = ctx.tmp('pbrSpP');
-      const spec   = ctx.tmp('pbrSpec');
+      const blinn  = ctx.tmp('pbrBl');
       const F0     = ctx.tmp('pbrF0');
       const fres   = ctx.tmp('pbrFr');
-      const amb    = ctx.tmp('pbrAmb');
+      const pres   = ctx.tmp('pbrPres');
       const dif    = ctx.tmp('pbrDif');
       const specC  = ctx.tmp('pbrSpC');
-      const envT   = ctx.tmp('pbrEnvT');
+      const envM   = ctx.tmp('pbrEnvM');
+      const envD   = ctx.tmp('pbrEnvD');
       const envC   = ctx.tmp('pbrEnvC');
       const edgeC  = ctx.tmp('pbrEdgeC');
       const colorV = ctx.tmp('pbrCol');
       const specM  = ctx.tmp('pbrSpM');
+      // `??` fallbacks so older saved graphs (where these params didn't
+      // exist yet) still compile with sensible defaults instead of zeroing
+      // every additive term.
+      const envS   = glslNum(ctx.params.envStrength  ?? 1.2);
+      const spcS   = glslNum(ctx.params.specStrength ?? 0.6);
+      const edgS   = glslNum(ctx.params.edgeStrength ?? 0.4);
+      const ambK   = glslNum(ctx.params.ambient      ?? 0.15);
       return {
         setup:
 `vec3 ${N} = normalize(${ctx.inputs.normal});
@@ -2354,37 +2358,58 @@ vec3 ${H} = normalize(${L} + ${V});
 float ${NdotL} = max(0.0, dot(${N}, ${L}));
 float ${NdotV} = max(0.0, dot(${N}, ${V}));
 float ${NdotH} = max(0.0, dot(${N}, ${H}));
-// Blinn-Phong exponent curve: smoothness^2 maps 0..1 → exp 8..256.
-float ${specP} = mix(8.0, 256.0, ${ctx.inputs.smoothness} * ${ctx.inputs.smoothness});
-float ${spec}  = pow(${NdotH}, ${specP});
-// Schlick Fresnel; F0 lerps from 0.04 (dielectrics) to 0.85 (metals).
-float ${F0}   = mix(0.04, 0.85, ${ctx.inputs.metallic});
-float ${fres} = ${F0} + (1.0 - ${F0}) * pow(1.0 - ${NdotV}, 5.0);
-// Diffuse + ambient floor (so back-facing fragments aren't pitch black).
-// Both terms get AO and the optional shadow factor mixed in.
-vec3 ${amb} = ${ctx.inputs.albedo} * 0.18 * ${ctx.inputs.ao};
-vec3 ${dif} = ${ctx.inputs.albedo} * ${NdotL} * ${ctx.inputs.ao} * ${ctx.inputs.shadow};
-// Specular: dielectrics get a white spec, metals get tinted spec (energy-
-// conserving-ish — metals don't have a separate diffuse contribution).
-vec3 ${specC} = mix(vec3(${spec}) * ${ctx.inputs.smoothness},
-                    ${ctx.inputs.albedo} * ${spec} * ${ctx.inputs.smoothness} * 1.5,
-                    ${ctx.inputs.metallic});
-// Environment: tinted by albedo for metals, neutral for dielectrics. The
-// metallic branch saturates with smoothness; the dielectric branch is
-// fresnel-weighted (only edges reflect for non-metals).
-vec3 ${envT} = mix(${ctx.inputs.environment},
-                   ${ctx.inputs.environment} * ${ctx.inputs.albedo},
-                   ${ctx.inputs.metallic});
-vec3 ${envC} = ${envT} * mix(${fres} * ${ctx.inputs.smoothness} * 0.5,
-                             ${ctx.inputs.smoothness},
-                             ${ctx.inputs.metallic});
-// Edge rim — additive on top of the lit material.
-vec3 ${edgeC} = vec3(${ctx.inputs.edge}) * 0.6;
-vec3 ${colorV} = ${amb} + ${dif} + ${specC} + ${envC} + ${edgeC};
-// Specular mask drives bloom — bright on smooth/metallic/edge fragments.
-float ${specM} = clamp(${spec} * ${ctx.inputs.smoothness}
-                       + ${ctx.inputs.edge} * 0.5
-                       + ${fres} * ${ctx.inputs.metallic}, 0.0, 1.0);`,
+// Blinn-Phong exponent curve: smoothness^2 maps 0..1 → exp 4..512 for a
+// crisp falloff at high smoothness. Squared so mid-values feel matte.
+float ${specP} = mix(4.0, 512.0, ${ctx.inputs.smoothness} * ${ctx.inputs.smoothness});
+float ${blinn} = pow(${NdotH}, ${specP});
+// Schlick Fresnel — F0 floors at 0.04 for dielectrics so dark dielectrics
+// get a hint of edge spec, lerps to a presence-aware albedo for metals
+// (clamped above 0.04 so black-albedo metal still has minimal F0 to read).
+vec3 ${F0}   = mix(vec3(0.04), max(${ctx.inputs.albedo}, vec3(0.04)), ${ctx.inputs.metallic});
+vec3 ${fres} = ${F0} + (vec3(1.0) - ${F0}) * pow(1.0 - ${NdotV}, 5.0);
+// presence: 0 only when albedo is black AND metallic is 0. Smoothstep so
+// dark colors (e.g., 0.02) don't get hard-clipped. This is the key fix
+// for the "background turns gray" complaint — additive terms are gated
+// by presence, so true-black areas stay true black.
+float ${pres} = smoothstep(0.0, 0.05, max(max(${ctx.inputs.albedo}.r, ${ctx.inputs.albedo}.g),
+                                          max(${ctx.inputs.albedo}.b, ${ctx.inputs.metallic})));
+// Diffuse — only for non-metals (energy split). NdotL × shadow + ambient
+// floor, scaled by AO. Capped at 1.0 albedo-multiplier to avoid runaway.
+vec3 ${dif} = ${ctx.inputs.albedo}
+            * (${NdotL} * ${ctx.inputs.shadow} * 0.85 + ${ambK})
+            * ${ctx.inputs.ao}
+            * (1.0 - ${ctx.inputs.metallic});
+// Specular highlight — fresnel-modulated Blinn, scaled by smoothness and
+// the user-tunable strength. Gated by presence so it doesn't bleed onto
+// pure-black dielectric backgrounds.
+vec3 ${specC} = ${fres} * ${blinn} * ${ctx.inputs.smoothness} * ${spcS} * ${pres};
+// Environment reflection — TWO contributions:
+//   (a) METAL term: env tinted toward albedo, scaled by metallic and the
+//       user's envStrength. This is the "mirror" path; it kicks in when
+//       metallic is high regardless of smoothness so a metallic mask of 1
+//       genuinely reads mirror-like.
+//   (b) DIELECTRIC term: a small fresnel-weighted env reflection so
+//       smooth non-metals show subtle reflection at glancing angles.
+// The metal env tint blends from neutral white toward albedo so dark-
+// albedo metals still show env color (otherwise black metal = black mirror,
+// which is technically correct PBR but unhelpful for stylized graphs).
+vec3 ${envM} = ${ctx.inputs.environment}
+             * mix(vec3(0.7), ${ctx.inputs.albedo}, 0.6)
+             * ${envS}
+             * mix(0.6, 1.0, ${ctx.inputs.smoothness});
+vec3 ${envD} = ${ctx.inputs.environment}
+             * ${fres}
+             * ${ctx.inputs.smoothness}
+             * 0.4;
+vec3 ${envC} = mix(${envD}, ${envM}, ${ctx.inputs.metallic}) * ${pres};
+// Edge — gated by presence (so gray edge maps don't turn black backgrounds
+// gray) and scaled down by the user's edgeStrength.
+vec3 ${edgeC} = vec3(${ctx.inputs.edge}) * ${edgS} * ${pres};
+vec3 ${colorV} = ${dif} + ${specC} + ${envC} + ${edgeC};
+// Specular mask for bloom — bright on metallic, smooth, or edge fragments.
+float ${specM} = clamp(${blinn} * ${ctx.inputs.smoothness} * ${pres}
+                       + ${ctx.inputs.edge} * 0.3 * ${pres}
+                       + ${ctx.inputs.metallic} * ${ctx.inputs.smoothness} * 0.5 * ${pres}, 0.0, 1.0);`,
         exprs:{ color: colorV, specular: specM },
       };
     },
