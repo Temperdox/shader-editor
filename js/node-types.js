@@ -1836,19 +1836,61 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
       };
     },
   },
+  emissionMap: {
+    passCache: 'live',
+    category:'Pattern', title:'Emission Map', desc:'self-lit color — image (rgb) or flat tint',
+    info:'Self-emissive RGB color added on top of the lit material — bypasses lighting, AO, shadow, fresnel, and reflections, so the result reads as if the surface is glowing on its own. Wire the output into PBR Material\'s `emission` input. Static mode samples an image\'s RGB; dynamic mode emits the `tint` color flat across the surface. Use the `intensity` param to crank emissive areas above 1.0 if you want bloom to pick them up.',
+    inputs:[{name:'p', type:'vec2', default:[0,0]}],
+    outputs:[{name:'color', type:'vec3'}],
+    params:[
+      {name:'mode',      kind:'segmented', default:'static', options:['dynamic','static']},
+      {name:'imageUrl',  kind:'image', default:'',
+       visibleWhen:p => p.mode === 'static'},
+      {name:'tint',      kind:'color', default:[1, 1, 1],
+       visibleWhen:p => p.mode === 'dynamic'},
+      {name:'intensity', kind:'number', default:1.0, min:0, max:8, step:0.05},
+    ],
+    generate:(ctx) => {
+      const intensity = glslNum(ctx.params.intensity ?? 1.0);
+      if ((ctx.params.mode ?? 'static') === 'static'){
+        if (!ctx.params.imageUrl){
+          return { exprs:{ color: 'vec3(0.0)' } };
+        }
+        const uName = glslUniformName(ctx.node.id, 'em');
+        return {
+          exprs:{ color: `(texture2D(${uName}, fract(${ctx.inputs.p})).rgb * ${intensity})` },
+          textures:[{ uniformName: uName }],
+        };
+      }
+      const tint = ctx.params.tint || [1, 1, 1];
+      return {
+        exprs:{
+          color: `(vec3(${glslNum(tint[0])}, ${glslNum(tint[1])}, ${glslNum(tint[2])}) * ${intensity})`,
+        },
+      };
+    },
+  },
   environment: {
     category:'Pattern', title:'Environment', desc:'matcap-style environment lookup for metallic surfaces',
-    info:'Samples an environment image as a matcap (Material Capture). The input normal is mapped to UV via `normal.xy * 0.5 + 0.5`, so the image is treated as a "lit sphere" lookup. Output is gated by the global Reflections button — returns vec3(0) when reflections are off so it has zero cost on the shader downstream.',
+    info:'Samples an environment image as a matcap (Material Capture). The input normal is mapped to UV via `normal.xy * 0.5 + 0.5`, with optional Y flip (no / yes / preview-only) and live parallax rotation by the preview card\'s tilt. Output is gated by the global Reflections button — returns vec3(0) when reflections are off so it has zero cost on the shader downstream.',
     inputs:[{name:'normal', type:'vec3', default:[0,0,1]}],
     outputs:[{name:'color', type:'vec3'}],
     params:[
       {name:'imageUrl',  kind:'image',  default:''},
       {name:'intensity', kind:'number', default:1.0, min:0, max:4, step:0.05},
-      // Most matcaps are painted with image-Y-up (highlight at the top of
-      // the sphere), but after the texture upload's Y flip the lit hemisphere
-      // ends up at v=0. Toggling this flips the V coordinate so the lit side
-      // tracks the surface normal's +Y again.
-      {name:'flipY',     kind:'segmented', default:'yes', options:['no','yes']},
+      // `no`      = never flip V (image used as-is)
+      // `yes`     = always flip V
+      // `preview` = flip only while preview mode is active (uses u_previewMode)
+      // Default is `preview` because most matcaps painted from a "lit sphere"
+      // need the flip to read correctly under preview's coordinate system,
+      // but the editor coordinate system is the natural one.
+      {name:'flipY',     kind:'segmented', default:'preview', options:['no','yes','preview']},
+      // Strength of the matcap parallax driven by the preview card's tilt.
+      // 0 = no parallax (matcap is locked to surface normal); 1 = full
+      // rotation (the env appears stationary while the card rotates through
+      // it). Only has any effect in preview mode (u_cardTilt is zero in the
+      // editor).
+      {name:'parallax',  kind:'number', default:1.0, min:0, max:2, step:0.05},
     ],
     generate:(ctx) => {
       const intensity = glslNum(ctx.params.intensity ?? 1.0);
@@ -1857,17 +1899,40 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
       }
       const uName = glslUniformName(ctx.node.id, 'env');
       const n  = ctx.tmp('envN');
+      const cn = ctx.tmp('envCn');
       const uv = ctx.tmp('envUv');
-      const flipY = (ctx.params.flipY ?? 'yes') === 'yes';
-      const vExpr = flipY ? `1.0 - (${n}.y * 0.5 + 0.5)` : `${n}.y * 0.5 + 0.5`;
+      const px = glslNum(ctx.params.parallax ?? 1.0);
+      const flipMode = ctx.params.flipY ?? 'preview';
+      // V-coord expression — chosen at compile time per flipMode.
+      // For `preview`, mix between flipped and non-flipped based on
+      // u_previewMode (0 in editor, 1 in preview).
+      let vExpr;
+      if (flipMode === 'yes'){
+        vExpr = `1.0 - (${cn}.y * 0.5 + 0.5)`;
+      } else if (flipMode === 'preview'){
+        vExpr = `mix(${cn}.y * 0.5 + 0.5, 1.0 - (${cn}.y * 0.5 + 0.5), step(0.5, u_previewMode))`;
+      } else {
+        vExpr = `${cn}.y * 0.5 + 0.5`;
+      }
       return {
-        // Normalize the input normal in case the user wired in something
-        // non-unit-length, then matcap-project to UV space. Multiplied by
-        // u_reflections so the global Reflections toggle short-circuits the
-        // texture sample's contribution to zero.
         setup:
 `vec3 ${n} = normalize(${ctx.inputs.normal});
-vec2 ${uv} = vec2(${n}.x * 0.5 + 0.5, ${vExpr});`,
+// Card-tilt parallax: rotate the lookup normal by the current card tilt
+// (in radians, scaled by the parallax param). u_cardTilt is zero in the
+// editor — these rotations collapse to identity so editor matcap lookups
+// remain unaffected.
+float _envCrx = u_cardTilt.x * ${px};
+float _envCry = u_cardTilt.y * ${px};
+float _envSx  = sin(_envCrx), _envCx = cos(_envCrx);
+float _envSy  = sin(_envCry), _envCy = cos(_envCry);
+// rotateY then rotateX to match the preview card's CSS transform order.
+vec3 ${cn} = vec3(_envCy * ${n}.x + _envSy * ${n}.z,
+                  ${n}.y,
+                 -_envSy * ${n}.x + _envCy * ${n}.z);
+${cn} = vec3(${cn}.x,
+             _envCx * ${cn}.y - _envSx * ${cn}.z,
+             _envSx * ${cn}.y + _envCx * ${cn}.z);
+vec2 ${uv} = vec2(${cn}.x * 0.5 + 0.5, ${vExpr});`,
         exprs:{
           color: `(texture2D(${uName}, ${uv}).rgb * ${intensity} * u_reflections)`,
         },
@@ -2303,8 +2368,8 @@ if (u_shadows > 0.5) {
     },
   },
   pbrMaterial: {
-    category:'Effect', title:'PBR Material', desc:'lit material: albedo + normal + ao + smoothness + metallic + env + edge',
-    info:'Single-node material composite. Diffuse + Blinn-Phong specular + metallic-driven environment reflection (mirror at metallic=1) + edge rim. All additive terms are gated by a `presence` mask derived from albedo brightness and metallic, so areas where albedo is black AND metallic is 0 stay pure black — the maps act like masks rather than blanket modifiers. Diffuse is killed for full metals (energy split). Wire albedo, the maps, and (optionally) a Shadow node and Centered UV for point-light positioning.',
+    category:'Effect', title:'PBR Material', desc:'lit material: albedo + normal + ao + smoothness + metallic + env + edge + emission',
+    info:'Single-node material composite. Diffuse + Blinn-Phong specular + Fresnel-driven environment reflection + masked edge rim + un-lit emission. Reflections inherit albedo darkness via Schlick F0 (so black metal stays black, not emissive gray). All additive terms are gated by a `presence` mask so true-black areas stay black. Wire albedo, the maps, and (optionally) Shadow / Centered UV / Emission Map.',
     inputs:[
       {name:'albedo',      type:'vec3',  default:[0.7, 0.7, 0.7]},
       {name:'normal',      type:'vec3',  default:[0, 0, 1]},
@@ -2313,6 +2378,10 @@ if (u_shadows > 0.5) {
       {name:'metallic',    type:'float', default:0.0},
       {name:'environment', type:'vec3',  default:[0, 0, 0]},
       {name:'edge',        type:'float', default:0.0},
+      // Pass-through emission — added directly to the final color without
+      // any modulation by lighting, AO, shadow, fresnel, etc. Wire the
+      // Emission Map node here for self-lit areas.
+      {name:'emission',    type:'vec3',  default:[0, 0, 0]},
       {name:'shadow',      type:'float', default:1.0},
       {name:'pos',         type:'vec2',  default:[0, 0]},
     ],
@@ -2321,12 +2390,13 @@ if (u_shadows > 0.5) {
       {name:'specular', type:'float'},
     ],
     params:[
-      // User-tunable strength knobs so the same shader can be turned up/down
-      // without re-wiring math nodes.
-      {name:'envStrength',   kind:'number', default:1.2, min:0, max:4, step:0.05},
-      {name:'specStrength',  kind:'number', default:0.6, min:0, max:3, step:0.05},
-      {name:'edgeStrength',  kind:'number', default:0.4, min:0, max:2, step:0.05},
-      {name:'ambient',       kind:'number', default:0.15, min:0, max:0.5, step:0.01},
+      // Tunable strength knobs. Defaults stay conservative so all four maps
+      // can be wired without blowing out highlights — bump these up if the
+      // result looks too dim.
+      {name:'envStrength',   kind:'number', default:1.0,  min:0, max:4,    step:0.05},
+      {name:'specStrength',  kind:'number', default:0.4,  min:0, max:3,    step:0.05},
+      {name:'edgeStrength',  kind:'number', default:0.25, min:0, max:2,    step:0.05},
+      {name:'ambient',       kind:'number', default:0.12, min:0, max:0.5,  step:0.01},
     ],
     generate:(ctx) => {
       const N      = ctx.tmp('pbrN');
@@ -2341,21 +2411,19 @@ if (u_shadows > 0.5) {
       const F0     = ctx.tmp('pbrF0');
       const fres   = ctx.tmp('pbrFr');
       const pres   = ctx.tmp('pbrPres');
+      const lit    = ctx.tmp('pbrLit');
       const dif    = ctx.tmp('pbrDif');
       const specC  = ctx.tmp('pbrSpC');
-      const envM   = ctx.tmp('pbrEnvM');
-      const envD   = ctx.tmp('pbrEnvD');
       const envC   = ctx.tmp('pbrEnvC');
       const edgeC  = ctx.tmp('pbrEdgeC');
       const colorV = ctx.tmp('pbrCol');
       const specM  = ctx.tmp('pbrSpM');
-      // `??` fallbacks so older saved graphs (where these params didn't
-      // exist yet) still compile with sensible defaults instead of zeroing
-      // every additive term.
-      const envS   = glslNum(ctx.params.envStrength  ?? 1.2);
-      const spcS   = glslNum(ctx.params.specStrength ?? 0.6);
-      const edgS   = glslNum(ctx.params.edgeStrength ?? 0.4);
-      const ambK   = glslNum(ctx.params.ambient      ?? 0.15);
+      // `??` fallbacks so saved graphs without these params still compile
+      // with sensible defaults instead of zeroing every additive term.
+      const envS = glslNum(ctx.params.envStrength  ?? 1.0);
+      const spcS = glslNum(ctx.params.specStrength ?? 0.4);
+      const edgS = glslNum(ctx.params.edgeStrength ?? 0.25);
+      const ambK = glslNum(ctx.params.ambient      ?? 0.12);
       return {
         setup:
 `vec3 ${N} = normalize(${ctx.inputs.normal});
@@ -2365,55 +2433,41 @@ vec3 ${H} = normalize(${L} + ${V});
 float ${NdotL} = max(0.0, dot(${N}, ${L}));
 float ${NdotV} = max(0.0, dot(${N}, ${V}));
 float ${NdotH} = max(0.0, dot(${N}, ${H}));
-// Blinn-Phong exponent curve: smoothness^2 maps 0..1 → exp 4..512 for a
-// crisp falloff at high smoothness. Squared so mid-values feel matte.
+// Blinn-Phong exponent: smoothness^2 maps 0..1 → exp 4..512 (tighter at high).
 float ${specP} = mix(4.0, 512.0, ${ctx.inputs.smoothness} * ${ctx.inputs.smoothness});
 float ${blinn} = pow(${NdotH}, ${specP});
-// Schlick Fresnel — F0 floors at 0.04 for dielectrics so dark dielectrics
-// get a hint of edge spec, lerps to a presence-aware albedo for metals
-// (clamped above 0.04 so black-albedo metal still has minimal F0 to read).
-vec3 ${F0}   = mix(vec3(0.04), max(${ctx.inputs.albedo}, vec3(0.04)), ${ctx.inputs.metallic});
+// Schlick Fresnel. F0 = 0.04 for dielectrics, lerps to ALBEDO for metals
+// (NOT max(albedo, 0.04)) — this is what gives metals their albedo-tinted
+// reflection and lets BLACK METAL READ AS BLACK MIRROR rather than as a
+// gray emissive smear.
+vec3 ${F0}   = mix(vec3(0.04), ${ctx.inputs.albedo}, ${ctx.inputs.metallic});
 vec3 ${fres} = ${F0} + (vec3(1.0) - ${F0}) * pow(1.0 - ${NdotV}, 5.0);
-// presence: 0 only when albedo is black AND metallic is 0. Smoothstep so
-// dark colors (e.g., 0.02) don't get hard-clipped. This is the key fix
-// for the "background turns gray" complaint — additive terms are gated
-// by presence, so true-black areas stay true black.
+// presence: 0 only when albedo is black AND metallic is 0. Gates the
+// dielectric env + spec + edge highlights so true-black non-metallic
+// background pixels stay black.
 float ${pres} = smoothstep(0.0, 0.05, max(max(${ctx.inputs.albedo}.r, ${ctx.inputs.albedo}.g),
                                           max(${ctx.inputs.albedo}.b, ${ctx.inputs.metallic})));
-// Diffuse — only for non-metals (energy split). NdotL × shadow + ambient
-// floor, scaled by AO. Capped at 1.0 albedo-multiplier to avoid runaway.
-vec3 ${dif} = ${ctx.inputs.albedo}
-            * (${NdotL} * ${ctx.inputs.shadow} * 0.85 + ${ambK})
-            * ${ctx.inputs.ao}
-            * (1.0 - ${ctx.inputs.metallic});
-// Specular highlight — fresnel-modulated Blinn, scaled by smoothness and
-// the user-tunable strength. Gated by presence so it doesn't bleed onto
-// pure-black dielectric backgrounds.
+// Diffuse — only for non-metals (energy split). Lambert × shadow with an
+// ambient floor that fills in the unlit side WITHOUT exceeding albedo (so
+// the diffuse term can't push the result past 1.0 on its own).
+float ${lit} = ${NdotL} * ${ctx.inputs.shadow} + ${ambK} * (1.0 - ${NdotL} * ${ctx.inputs.shadow});
+vec3 ${dif} = ${ctx.inputs.albedo} * ${lit} * ${ctx.inputs.ao} * (1.0 - ${ctx.inputs.metallic});
+// Specular highlight — Fresnel-modulated Blinn-Phong, scaled by smoothness.
+// Gated by presence so dim/black surfaces don't pick up gray spec.
 vec3 ${specC} = ${fres} * ${blinn} * ${ctx.inputs.smoothness} * ${spcS} * ${pres};
-// Environment reflection — TWO contributions:
-//   (a) METAL term: env tinted toward albedo, scaled by metallic and the
-//       user's envStrength. This is the "mirror" path; it kicks in when
-//       metallic is high regardless of smoothness so a metallic mask of 1
-//       genuinely reads mirror-like.
-//   (b) DIELECTRIC term: a small fresnel-weighted env reflection so
-//       smooth non-metals show subtle reflection at glancing angles.
-// The metal env tint blends from neutral white toward albedo so dark-
-// albedo metals still show env color (otherwise black metal = black mirror,
-// which is technically correct PBR but unhelpful for stylized graphs).
-vec3 ${envM} = ${ctx.inputs.environment}
-             * mix(vec3(0.7), ${ctx.inputs.albedo}, 0.6)
-             * ${envS}
-             * mix(0.6, 1.0, ${ctx.inputs.smoothness});
-vec3 ${envD} = ${ctx.inputs.environment}
-             * ${fres}
-             * ${ctx.inputs.smoothness}
-             * 0.4;
-vec3 ${envC} = mix(${envD}, ${envM}, ${ctx.inputs.metallic}) * ${pres};
-// Edge — gated by presence (so gray edge maps don't turn black backgrounds
-// gray) and scaled down by the user's edgeStrength.
-vec3 ${edgeC} = vec3(${ctx.inputs.edge}) * ${edgS} * ${pres};
-vec3 ${colorV} = ${dif} + ${specC} + ${envC} + ${edgeC};
-// Specular mask for bloom — bright on metallic, smooth, or edge fragments.
+// Environment reflection — pure PBR via Fresnel × smoothness × envStrength.
+// Because F0 = albedo for metals, env naturally inherits albedo's
+// darkness/tint: black metal = black mirror, white metal = full mirror.
+// The presence mask additionally suppresses dielectric edge reflections on
+// pure-black backgrounds.
+vec3 ${envC} = ${ctx.inputs.environment} * ${fres} * ${ctx.inputs.smoothness} * ${envS} * ${pres};
+// Edge — masked by smoothness * presence so a soft (mostly gray) edge map
+// only contributes where the surface actually is.
+vec3 ${edgeC} = vec3(${ctx.inputs.edge}) * ${edgS} * ${ctx.inputs.smoothness} * ${pres};
+// Emission — pass-through (un-lit, un-shadowed, un-fresnel'd). Wire from
+// the Emission Map node for self-lit highlights, sigils, eyes, etc.
+vec3 ${colorV} = ${dif} + ${specC} + ${envC} + ${edgeC} + ${ctx.inputs.emission};
+// Specular mask drives bloom — bright on metallic, smooth, or edge fragments.
 float ${specM} = clamp(${blinn} * ${ctx.inputs.smoothness} * ${pres}
                        + ${ctx.inputs.edge} * 0.3 * ${pres}
                        + ${ctx.inputs.metallic} * ${ctx.inputs.smoothness} * 0.5 * ${pres}, 0.0, 1.0);`,

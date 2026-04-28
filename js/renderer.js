@@ -75,7 +75,7 @@ const renderer = (() => {
   `;
 
   let program = null;
-  let uTime, uMouse, uRes, uSimLight, uShadows, uReflections;
+  let uTime, uMouse, uRes, uSimLight, uShadows, uReflections, uPreviewMode, uCardTilt;
   let mx = 0.5, my = 0.5;
 
   // Texture registry bound to this GL context. One per renderer so each
@@ -250,6 +250,8 @@ const renderer = (() => {
       uSimLight    = gl.getUniformLocation(program, 'u_simLight');
       uShadows     = gl.getUniformLocation(program, 'u_shadows');
       uReflections = gl.getUniformLocation(program, 'u_reflections');
+      uPreviewMode = gl.getUniformLocation(program, 'u_previewMode');
+      uCardTilt    = gl.getUniformLocation(program, 'u_cardTilt');
       // Noise sampler — only present when the compiled shader actually
       // references the textured snoise helper. getUniformLocation returns
       // null otherwise; bind code below short-circuits on null.
@@ -281,6 +283,8 @@ const renderer = (() => {
         const pUSimLight    = gl.getUniformLocation(pProg, 'u_simLight');
         const pUShadows     = gl.getUniformLocation(pProg, 'u_shadows');
         const pUReflections = gl.getUniformLocation(pProg, 'u_reflections');
+        const pUPreviewMode = gl.getUniformLocation(pProg, 'u_previewMode');
+        const pUCardTilt    = gl.getUniformLocation(pProg, 'u_cardTilt');
         const pUNoise       = gl.getUniformLocation(pProg, 'u_noise');
         if (pUNoise != null) gl.uniform1i(pUNoise, NOISE_UNIT);
 
@@ -315,6 +319,7 @@ const renderer = (() => {
           fbH: fb.h,
           uTime: pUTime, uMouse: pUMouse, uRes: pURes,
           uSimLight: pUSimLight, uShadows: pUShadows, uReflections: pUReflections,
+          uPreviewMode: pUPreviewMode, uCardTilt: pUCardTilt,
           uNoise: pUNoise,
           imageBindings: passImageBindings,
           upstreamSlots,
@@ -410,6 +415,10 @@ const renderer = (() => {
           if (p.uSimLight)    gl.uniform3f(p.uSimLight, slx, sly, slz);
           if (p.uShadows)     gl.uniform1f(p.uShadows, shadowsVal);
           if (p.uReflections) gl.uniform1f(p.uReflections, reflectionsVal);
+          // Editor: not preview, no card tilt — Environment node uses these
+          // to gate matcap Y-flip and matcap parallax to preview-only.
+          if (p.uPreviewMode) gl.uniform1f(p.uPreviewMode, 0.0);
+          if (p.uCardTilt)    gl.uniform2f(p.uCardTilt, 0.0, 0.0);
 
           if (p.uNoise != null && noiseBake){
             gl.activeTexture(gl.TEXTURE0 + NOISE_UNIT);
@@ -480,6 +489,10 @@ const renderer = (() => {
           // is < 0.5, and PBR Material short-circuits its env-mix branch.
           const reflectionsOn = document.body.classList.contains('reflections-on');
           if (uReflections) gl.uniform1f(uReflections, reflectionsOn ? 1.0 : 0.0);
+          // u_previewMode + u_cardTilt are zero in the editor — Environment
+          // node reads them to gate matcap Y-flip and parallax to preview.
+          if (uPreviewMode) gl.uniform1f(uPreviewMode, 0.0);
+          if (uCardTilt)    gl.uniform2f(uCardTilt, 0.0, 0.0);
           // Bind the pre-baked noise atlas to its reserved unit. Cheap;
           // skip if the bake isn't available or the shader doesn't sample
           // it (uNoise == null when the program doesn't reference it).

@@ -47,7 +47,7 @@ const PREVIEW = (() => {
   let gl = null;
   let program = null;
   let posBuf, uvBuf, idxBuf, indexCount = 0;
-  let uTime, uMouse, uRes, uSimLight, uShadows, uReflections, uNoise;
+  let uTime, uMouse, uRes, uSimLight, uShadows, uReflections, uPreviewMode, uCardTilt, uNoise;
   let startTime = 0;
   let rafId = null;
   let tickRafId = null;
@@ -289,6 +289,8 @@ const PREVIEW = (() => {
     uSimLight    = gl.getUniformLocation(program, 'u_simLight');
     uShadows     = gl.getUniformLocation(program, 'u_shadows');
     uReflections = gl.getUniformLocation(program, 'u_reflections');
+    uPreviewMode = gl.getUniformLocation(program, 'u_previewMode');
+    uCardTilt    = gl.getUniformLocation(program, 'u_cardTilt');
     uNoise       = gl.getUniformLocation(program, 'u_noise');
     if (uNoise != null) gl.uniform1i(uNoise, PREVIEW_NOISE_UNIT);
 
@@ -326,6 +328,8 @@ const PREVIEW = (() => {
       const pUSimLight    = gl.getUniformLocation(pProg, 'u_simLight');
       const pUShadows     = gl.getUniformLocation(pProg, 'u_shadows');
       const pUReflections = gl.getUniformLocation(pProg, 'u_reflections');
+      const pUPreviewMode = gl.getUniformLocation(pProg, 'u_previewMode');
+      const pUCardTilt    = gl.getUniformLocation(pProg, 'u_cardTilt');
       const pUNoise       = gl.getUniformLocation(pProg, 'u_noise');
       if (pUNoise != null) gl.uniform1i(pUNoise, PREVIEW_NOISE_UNIT);
 
@@ -350,6 +354,7 @@ const PREVIEW = (() => {
         fbo: fb.fbo, tex: fb.tex, fbW: fb.w, fbH: fb.h,
         uTime: pUTime, uMouse: pUMouse, uRes: pURes,
         uSimLight: pUSimLight, uShadows: pUShadows, uReflections: pUReflections,
+        uPreviewMode: pUPreviewMode, uCardTilt: pUCardTilt,
         uNoise: pUNoise,
         imageBindings: passImageBindings,
         upstreamSlots,
@@ -439,6 +444,11 @@ const PREVIEW = (() => {
         // Reflections follow the body class (driven by either the editor's
         // Reflections fab or the preview's own Reflections fab).
         if (p.uReflections) gl.uniform1f(p.uReflections, document.body.classList.contains('reflections-on') ? 1.0 : 0.0);
+        // Preview-specific: signal preview mode so the Environment node
+        // flips matcap V (preview convention) and feed the live card tilt
+        // (in radians) so metallic reflections parallax with rotation.
+        if (p.uPreviewMode) gl.uniform1f(p.uPreviewMode, 1.0);
+        if (p.uCardTilt)    gl.uniform2f(p.uCardTilt, curRx * Math.PI / 180, curRy * Math.PI / 180);
         if (p.uNoise != null && noiseBake){
           gl.activeTexture(gl.TEXTURE0 + PREVIEW_NOISE_UNIT);
           gl.bindTexture(gl.TEXTURE_2D, noiseBake.texture);
@@ -493,6 +503,11 @@ const PREVIEW = (() => {
         // Reflections — driven by `body.reflections-on` (toggled by either
         // the editor's #reflectionsBtn or the preview's #previewReflectionsBtn).
         if (uReflections) gl.uniform1f(uReflections, document.body.classList.contains('reflections-on') ? 1.0 : 0.0);
+        // Preview signal + live card tilt for matcap parallax. These read as
+        // 0 / vec2(0) in editor mode (renderer.js writes those), so the same
+        // Environment node compiles correctly for both contexts.
+        if (uPreviewMode) gl.uniform1f(uPreviewMode, 1.0);
+        if (uCardTilt)    gl.uniform2f(uCardTilt, curRx * Math.PI / 180, curRy * Math.PI / 180);
         // Bind the noise atlas (plan A) and each cache-pass FBO (plan B).
         // Without these, every snoise() call and every pass-sampler reads
         // garbage in the preview context, which is what made Fuzzy Blob
