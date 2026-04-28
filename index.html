@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,300;1,9..144,400&family=Albert+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/main.css?v=13" />
-<link rel="stylesheet" href="css/preview.css?v=13" />
+<link rel="stylesheet" href="css/preview.css?v=14" />
 </head>
 <body>
 
@@ -383,6 +383,23 @@
     </svg>
     Back to Editor
   </button>
+
+  <div class="preview-fab-group">
+    <button class="preview-fab" id="previewSaveVideoBtn" type="button" title="Record the card face to MP4 (or WebM if unsupported)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polygon points="23 7 16 12 23 17 23 7"></polygon>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+      </svg>
+      <span class="preview-save-video-label">Save Video</span>
+    </button>
+    <button class="preview-fab" id="previewHideContentBtn" type="button" title="Hide card text and avatar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </svg>
+      <span class="preview-hide-label">Hide</span>
+    </button>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -412,8 +429,8 @@
 <script src="js/templates/baked-graphs.js?v=14"></script>
 <script src="js/templates.js?v=13"></script>
 <script src="js/persistence.js?v=13"></script>
-<script src="js/preview.js?v=13"></script>
-<script src="js/main.js?v=13"></script>
+<script src="js/preview.js?v=14"></script>
+<script src="js/main.js?v=14"></script>
 
 </body>
 </html>

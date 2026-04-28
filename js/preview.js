@@ -661,6 +661,11 @@ const PREVIEW = (() => {
     // 2) hide editor, show preview, compile the current shader
     document.body.classList.add('preview-mode');
     previewRoot.classList.add('active');
+    // each enter starts with card content visible — also resync the toggle
+    // label in case the user left it on "Show" last time.
+    previewRoot.classList.remove('content-hidden');
+    const hideLabel = document.querySelector('#previewHideContentBtn .preview-hide-label');
+    if (hideLabel) hideLabel.textContent = 'Hide';
 
     if (ensureGL()){
       const res = compileGraph();
@@ -701,6 +706,14 @@ const PREVIEW = (() => {
 
   async function exitPreview(){
     if (!active) return;
+    // If a preview-targeted recording is still running, stop it first — once
+    // we exit, the rAF loop halts and the face canvas freezes, so the rest
+    // of the captured stream would just be a still frame.
+    const previewSaveBtn = document.getElementById('previewSaveVideoBtn');
+    if (window.SAVE_VIDEO && window.SAVE_VIDEO.isRecording()
+        && previewSaveBtn && previewSaveBtn.classList.contains('recording')){
+      window.SAVE_VIDEO.stop();
+    }
     fadeLayer.classList.add('visible');
     await wait(FADE_MS);
 
@@ -726,6 +739,40 @@ const PREVIEW = (() => {
 
   if (previewBtn) previewBtn.addEventListener('click', enterPreview);
   if (backBtn)    backBtn.addEventListener('click',    exitPreview);
+
+  const hideContentBtn = $('#previewHideContentBtn');
+  if (hideContentBtn){
+    hideContentBtn.addEventListener('click', () => {
+      const hidden = previewRoot.classList.toggle('content-hidden');
+      const label = hideContentBtn.querySelector('.preview-hide-label');
+      if (label) label.textContent = hidden ? 'Show' : 'Hide';
+    });
+  }
+
+  // Save Video — reuses the editor's recording engine (window.SAVE_VIDEO),
+  // pointing it at the preview face canvas and this button instead of the
+  // editor's bg shader / Save Video fab.
+  const saveVideoBtn = $('#previewSaveVideoBtn');
+  if (saveVideoBtn){
+    const saveVideoLabel = saveVideoBtn.querySelector('.preview-save-video-label');
+    saveVideoBtn.addEventListener('click', () => {
+      if (!window.SAVE_VIDEO){
+        if (typeof toast === 'function') toast('recording engine not ready', 'err');
+        return;
+      }
+      if (window.SAVE_VIDEO.isRecording()){
+        window.SAVE_VIDEO.stop();
+        return;
+      }
+      window.SAVE_VIDEO.setTarget({
+        getCanvas: () => faceCanvas,
+        button:    saveVideoBtn,
+        labelEl:   saveVideoLabel,
+        idleLabel: 'Save Video',
+      });
+      window.SAVE_VIDEO.open();
+    });
+  }
 
   return { enterPreview, exitPreview };
 })();

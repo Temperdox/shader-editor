@@ -1692,7 +1692,9 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
   /* ---- effects ---- */
   posterize: {
     category:'Effect', title:'Posterize', desc:'quantize each color channel to N levels',
-    info:'Quantizes each channel of a vec3 color to N discrete levels: `floor(c * levels) / levels`. Low levels (3-5) = cel-shaded / screen-print look; higher (16-32) = subtle gradient banding. The vec3 sibling of Posterize (Float).',
+    info:'Quantizes each channel of a vec3 color to N discrete levels: `floor(c * levels) / levels`. Low levels (3-5) = cel-shaded / screen-print look; higher (16-32) = subtle gradient banding. The vec3 sibling of Posterize (Float). ' +
+        'floor(c * levels) / levels` snaps each channel to a discrete stair. Low levels (3–5) give a cel-shaded / screen-print look; higher ' +
+        'levels (16–32) just round off subtle gradients.',
     inputs:[
       {name:'color',  type:'vec3',  default:[0, 0, 0]},
       {name:'levels', type:'float', default:4},
@@ -1707,7 +1709,9 @@ float ${hU} = heightField(${p} + vec2(0.0, ${eps}), ${sc}, ${ctx.inputs.time});`
   },
   threshold: {
     category:'Effect', title:'Threshold', desc:'keep colors brighter than cutoff (bloom prep)',
-    info:'Keeps only pixels brighter than `cutoff` (luminance-weighted), with a soft `softness` ramp. Standard first half of a bloom pipeline — combine with Soft Glow / HDR Boost to spread and boost the bright spots.',
+    info:'Keeps only pixels brighter than `cutoff` (luminance-weighted), with a soft `softness` ramp. Standard first half of a bloom pipeline — combine with Soft Glow / HDR Boost to spread and boost the bright spots. ' +
+        'Extracts "bright" pixels using a luminance-weighted smoothstep. This is the first half of a traditional bloom pipeline; combine the ' +
+        'output with Soft Glow / HDR Boost to fake the spread and boost.',
     inputs:[
       {name:'color',    type:'vec3',  default:[0, 0, 0]},
       {name:'cutoff',   type:'float', default:0.6},
@@ -1743,7 +1747,9 @@ float ${mask} = smoothstep(${ctx.inputs.cutoff}, ${ctx.inputs.cutoff} + ${ctx.in
   },
   softGlow: {
     category:'Effect', title:'Soft Glow', desc:'radial glow from a point — gaussian falloff',
-    info:'Radial gaussian glow centered at a point. Outputs a colored halo that falls off smoothly with distance. Use for warm light sources, mouse glows, or as a building block for bloom.',
+    info:'Radial gaussian glow centered at a point. Outputs a colored halo that falls off smoothly with distance. Use for warm light sources, mouse glows, or as a building block for bloom. ' +
+        'Cheap bloom-like "halo" emitter. Emits `color` at `center`, falling off smoothly over `radius` with a gaussian curve. Stack multiple ' +
+        'Soft Glows (Blend → Add) to fake multiple glowing points, or place one at the position of a bright feature in your shader.',
     inputs:[
       {name:'pos',    type:'vec2',  default:[0.5, 0.5]},
       {name:'center', type:'vec2',  default:[0.5, 0.5]},
@@ -1770,7 +1776,10 @@ float ${i} = exp(-(${d} * ${d}) / max(${ctx.inputs.radius} * ${ctx.inputs.radius
   },
   starburst: {
     category:'Effect', title:'Starburst', desc:'N-point star rays from a center (lens-flare)',
-    info:'N-pointed starburst centered at a point — angular sin pattern combined with radial falloff. Use for lens flares, light glints, or starlight badges. Increase `points` for more rays, `sharpness` for thinner rays.',
+    info:'N-pointed starburst centered at a point — angular sin pattern combined with radial falloff. Use for lens flares, light glints, or starlight badges. Increase `points` for more rays, `sharpness` for thinner rays. ' +
+        'Makes a lens-flare / anime-sparkle spike pattern. `cos(angle*N)` gives N peaks around the center; `pow(max(·, 0), sharpness)` thins them to ' +
+        'thin rays. Distance falloff (`1 - smoothstep(0, radius, r)`) fades the rays out as they leave the center. Feed the output into a ' +
+        'Grayscale → Blend(add) to composite onto a scene.',
     inputs:[
       {name:'pos',       type:'vec2',  default:[0.5, 0.5]},
       {name:'center',    type:'vec2',  default:[0.5, 0.5]},
@@ -1803,7 +1812,10 @@ float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpn
   },
   hdrBoost: {
     category:'Effect', title:'HDR Boost', desc:'exposure (in stops) + gamma tonemap',
-    info:'Tonemapping pass: applies exposure (in stops, like a camera) then gamma correction. Use to push intentionally over-bright content (post-bloom, post-glow) into a properly-mapped 0..1 range.',
+    info:'Tonemapping pass: applies exposure (in stops, like a camera) then gamma correction. Use to push intentionally over-bright content (post-bloom, post-glow) into a properly-mapped 0..1 range. ' +
+        'Last step of a pseudo-bloom pipeline. `exp2(exposure)` gives you "stops" of brightness (+1 = double, +2 = 4×, etc.). Gamma curve ' +
+        'compresses highlights — numbers > 1 make brights saturate more gracefully, useful after stacking Soft Glows that push the color ' +
+        'past 1.0.',
     inputs:[
       {name:'color',    type:'vec3',  default:[0, 0, 0]},
       {name:'exposure', type:'float', default:0.5},   // EV stops: 0 = no change, +1 = 2× brighter
@@ -1827,7 +1839,10 @@ float ${w} = pow(max(cos(${a} * ${ctx.inputs.points}), 0.0), ${ctx.inputs.sharpn
   },
   sheenLines: {
     category:'Effect', title:'Sheen Lines', desc:'thin moving streaks of light (glass/sheen)',
-    info:'Thin moving streaks of light — the diagonal sheen you see on glass, satin, or polished metal. Use as a multiplied overlay on a base color to add a \'glossy\' feel.',
+    info:'Thin moving streaks of light — the diagonal sheen you see on glass, satin, or polished metal. Use as a multiplied overlay on a base color to add a \'glossy\' feel. ' +
+        'Rotates the UV by `angle`, takes a scalar coord along that axis, offsets it by time*speed, then builds a thin symmetric peak at each ' +
+        'cycle. Output is a [0,1] mask with narrow bright lines separated by dark — looks like light sliding across a pane of glass. Wrap it with' +
+        ' a Mix (→ iridescence color) and add over a crystal body for sheen.',
     inputs:[
       {name:'uv',        type:'vec2',  default:[0, 0]},
       {name:'time',      type:'float', default:0},

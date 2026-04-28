@@ -32,17 +32,24 @@
   pointer-events:auto;
 }
 
-/* ---- hide editor chrome while preview is active ---- */
+/* ---- hide editor chrome while preview is active ----
+   `.save-video-modal` and `#saveVideoBack` are exempt: the preview reuses
+   the editor's recording modal. The toast is also kept visible so the
+   "saved … video" confirmation surfaces after a preview recording. */
 body.preview-mode #bgShader,
 body.preview-mode .chrome,
 body.preview-mode .modal,
 body.preview-mode .save-fab,
 body.preview-mode .ctx,
-body.preview-mode .picker,
-body.preview-mode .picker-backdrop,
-body.preview-mode .toast{
+body.preview-mode .picker:not(.save-video-modal),
+body.preview-mode .picker-backdrop:not(#saveVideoBack){
   display:none !important;
 }
+/* lift the modal + backdrop above the preview-root (z-index:900) and the
+   fade-layer (z-index:1000) so the modal sits on top while preview is up */
+body.preview-mode .picker.save-video-modal{ z-index:1010; }
+body.preview-mode #saveVideoBack{ z-index:1005; }
+body.preview-mode .toast{ z-index:1015; }
 
 /* ---- preview root ---- */
 .preview-root{
@@ -422,3 +429,67 @@ body.preview-mode .toast{
     inset 0 1px 0 rgba(255,255,255,.32);
 }
 .preview-back-btn:active{ transform:scale(.98); }
+
+/* ---- preview-only fab group (Save Video + Hide) ----
+   Mirrors the editor's `.fab-group` placement at bottom-right. Lives inside
+   `.preview-root` so the buttons only appear while preview mode is active. */
+.preview-root .preview-fab-group{
+  position:fixed;
+  right:clamp(12px, 1.4vw, 28px);
+  bottom:clamp(12px, 1.4vh, 28px);
+  z-index:950;
+  display:flex;
+  gap:clamp(6px, 0.6vw, 12px);
+  align-items:center;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  max-width:calc(100vw - 24px);
+}
+.preview-root .preview-fab{
+  padding:clamp(8px, 0.85vh, 14px) clamp(12px, 1.3vw, 24px);
+  font-family:inherit;
+  font-size:clamp(9px, 0.7vw, 12px);
+  letter-spacing:.26em;
+  text-transform:uppercase;
+  color:var(--ink);
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.04)),
+    rgba(22,22,28,.55);
+  border:1px solid rgba(255,255,255,.2);
+  border-radius:999px;
+  cursor:pointer;
+  backdrop-filter:blur(18px) saturate(1.4);
+  -webkit-backdrop-filter:blur(18px) saturate(1.4);
+  box-shadow:
+    0 14px 34px -14px rgba(0,0,0,.7),
+    inset 0 1px 0 rgba(255,255,255,.24);
+  display:inline-flex;
+  align-items:center;
+  gap:clamp(6px, 0.6vw, 12px);
+  transition:transform .2s, box-shadow .2s, background .2s;
+}
+.preview-root .preview-fab:hover{
+  transform:translateY(-1px);
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,.06)),
+    rgba(28,28,36,.6);
+  box-shadow:
+    0 20px 40px -14px rgba(0,0,0,.8),
+    inset 0 1px 0 rgba(255,255,255,.32);
+}
+.preview-root .preview-fab:active{ transform:scale(.98); }
+.preview-root .preview-fab svg{
+  width:clamp(11px, 0.95vw, 16px);
+  height:clamp(11px, 0.95vw, 16px);
+}
+/* recording-state glow — same red treatment as `.save-fab.recording` */
+.preview-root .preview-fab.recording{
+  border-color:rgba(255,100,100,.85);
+  color:#ffc4c4;
+  box-shadow:0 0 0 1px rgba(255,100,100,.4) inset, 0 0 22px rgba(255,80,80,.35);
+  animation:save-rec-pulse 1.5s ease-in-out infinite;
+}
+
+/* When the toggle is on, hide the card's text + avatar layer so only the
+   shader face shows through. */
+.preview-root.content-hidden .card .content{ display:none; }

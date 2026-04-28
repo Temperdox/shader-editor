@@ -210,7 +210,19 @@ $('#shadowsBtn').addEventListener('click', () => {
   ];
 
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
-  function srcCanvas(){ return (typeof renderer !== 'undefined' && renderer && renderer.canvas) || $('#bgShader'); }
+
+  // Recording target — what canvas the modal previews/records, and which
+  // button surfaces the recording state. Default is the editor's bg shader,
+  // but `window.SAVE_VIDEO.setTarget(...)` can swap it (used by preview.js
+  // to record the preview card's face canvas using the same modal).
+  const editorTarget = {
+    getCanvas: () => (typeof renderer !== 'undefined' && renderer && renderer.canvas) || $('#bgShader'),
+    button:    btn,
+    labelEl:   label,
+    idleLabel: 'Save Video',
+  };
+  let target = editorTarget;
+  function srcCanvas(){ return target.getCanvas(); }
   function defaultFilename(){
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     return `shader-${ts}`;
@@ -504,13 +516,13 @@ $('#shadowsBtn').addEventListener('click', () => {
     };
 
     recorder.start(250);
-    btn.classList.add('recording');
+    target.button.classList.add('recording');
     startTs = performance.now();
     const totalStr = chosenDuration > 0 ? ` / ${fmtDur(chosenDuration)}` : '';
-    if (label) label.textContent = `STOP 0:00${totalStr}`;
+    if (target.labelEl) target.labelEl.textContent = `STOP 0:00${totalStr}`;
     timerId = setInterval(() => {
       const elapsedSec = Math.floor((performance.now() - startTs) / 1000);
-      if (label) label.textContent = `STOP ${fmtDur(elapsedSec)}${totalStr}`;
+      if (target.labelEl) target.labelEl.textContent = `STOP ${fmtDur(elapsedSec)}${totalStr}`;
     }, 250);
     if (chosenDuration > 0){
       autoStopId = setTimeout(stopRecording, chosenDuration * 1000);
@@ -520,10 +532,10 @@ $('#shadowsBtn').addEventListener('click', () => {
   function stopRecording(){
     if (!recorder || recorder.state === 'inactive') return;
     recorder.stop();
-    btn.classList.remove('recording');
+    target.button.classList.remove('recording');
     if (timerId){ clearInterval(timerId); timerId = null; }
     if (autoStopId){ clearTimeout(autoStopId); autoStopId = null; }
-    if (label) label.textContent = 'Save Video';
+    if (target.labelEl) target.labelEl.textContent = target.idleLabel;
   }
 
   // ---- modal wiring ----
@@ -579,8 +591,17 @@ $('#shadowsBtn').addEventListener('click', () => {
   // main button: stop if recording, otherwise open the settings modal
   btn.addEventListener('click', () => {
     if (recorder && recorder.state !== 'inactive') stopRecording();
-    else openModal();
+    else { target = editorTarget; openModal(); }
   });
+
+  // Public API — lets preview.js (or anything else) reuse this engine to
+  // record a different canvas through the same modal/UI flow.
+  window.SAVE_VIDEO = {
+    setTarget(t){ target = t || editorTarget; },
+    isRecording(){ return !!(recorder && recorder.state !== 'inactive'); },
+    open: openModal,
+    stop: stopRecording,
+  };
 })();
 
 // Save shader as PNG — downloads the current bgShader canvas. Requires
