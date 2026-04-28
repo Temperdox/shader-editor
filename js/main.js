@@ -420,11 +420,17 @@ $('#shadowsBtn').addEventListener('click', () => {
     };
     drawPreview();
   }
-  function closeModal(){
+  function closeModal(opts){
     if (!modal) return;
     modal.classList.remove('open');
     back.classList.remove('open');
     if (previewRafId){ cancelAnimationFrame(previewRafId); previewRafId = 0; }
+    // `fireCancel` defaults to true — callers that close the modal because
+    // they're starting recording (Start button, Enter key) opt out by
+    // passing { fireCancel: false } so cleanup hooks aren't run prematurely.
+    if (!opts || opts.fireCancel !== false){
+      if (typeof target.onCancel === 'function') target.onCancel();
+    }
   }
 
   function startRecording(){
@@ -536,6 +542,7 @@ $('#shadowsBtn').addEventListener('click', () => {
     if (timerId){ clearInterval(timerId); timerId = null; }
     if (autoStopId){ clearTimeout(autoStopId); autoStopId = null; }
     if (target.labelEl) target.labelEl.textContent = target.idleLabel;
+    if (typeof target.onStop === 'function') target.onStop();
   }
 
   // ---- modal wiring ----
@@ -570,15 +577,24 @@ $('#shadowsBtn').addEventListener('click', () => {
       [...cropEl.querySelectorAll('.sv-crop-handle')].forEach(h =>
         h.addEventListener('pointerdown', onPointerDown));
     }
-    cancelBtn.addEventListener('click', closeModal);
-    back.addEventListener('click', closeModal);
+    cancelBtn.addEventListener('click', () => closeModal());
+    back.addEventListener('click', () => closeModal());
+    // The modal has a 140ms opacity fade-out. For canvas-captureStream
+    // recording (editor) this doesn't matter — the modal isn't in the
+    // captured pixels. For tab-capture recording (preview) it does — the
+    // first frames would catch the fading modal. The small delay covers
+    // both paths uniformly.
+    const MODAL_FADE_MS = 180;
     startBtn.addEventListener('click', () => {
-      closeModal();
-      startRecording();
+      closeModal({ fireCancel: false });
+      setTimeout(startRecording, MODAL_FADE_MS);
     });
     if (filenameI) filenameI.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter'){ e.preventDefault(); closeModal(); startRecording(); }
-      else if (e.key === 'Escape'){ closeModal(); }
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        closeModal({ fireCancel: false });
+        setTimeout(startRecording, MODAL_FADE_MS);
+      } else if (e.key === 'Escape'){ closeModal(); }
     });
     window.addEventListener('resize', () => {
       if (modal.classList.contains('open')){

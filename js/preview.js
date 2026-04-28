@@ -712,7 +712,9 @@ const PREVIEW = (() => {
     const previewSaveBtn = document.getElementById('previewSaveVideoBtn');
     if (window.SAVE_VIDEO && window.SAVE_VIDEO.isRecording()
         && previewSaveBtn && previewSaveBtn.classList.contains('recording')){
-      window.SAVE_VIDEO.stop();
+      window.SAVE_VIDEO.stop();  // onStop hook also cleans the display stream
+    } else {
+      cleanupDisplayCapture();
     }
     fadeLayer.classList.add('visible');
     await wait(FADE_MS);
@@ -749,26 +751,163 @@ const PREVIEW = (() => {
     });
   }
 
-  // Save Video — reuses the editor's recording engine (window.SAVE_VIDEO),
-  // pointing it at the preview face canvas and this button instead of the
-  // editor's bg shader / Save Video fab.
+  // ---- Save Video — composited capture (card + glow + 3D tilt) ----
+  // Recording the bare WebGL face would lose the tilt, glow, sheen, and rim
+  // — the parts that make the preview look like more than a flat shader. To
+  // preserve them we capture the browser tab via getDisplayMedia, crop each
+  // frame to the stage area + a black-background margin, and feed that to
+  // the existing recording engine through an offscreen 2D canvas.
+  let displayStream    = null;
+  let displayVideo     = null;
+  let compositeCanvas  = null;
+  let compositeCtx     = null;
+  let compositeRafId   = 0;
+  let captureRequestPending = false;
+  // Black-background padding around the stage so the 3D card doesn't get
+  // clipped at extreme tilts and the glow has room to breathe. CSS px.
+  const CAPTURE_PAD = 80;
+
+  function readCaptureRectCSS(){
+    if (!stage) return null;
+    const r = stage.getBoundingClientRect();
+    const left = Math.max(0, r.left - CAPTURE_PAD);
+    const top  = Math.max(0, r.top  - CAPTURE_PAD);
+    const width  = Math.min(window.innerWidth  - left, r.width  + CAPTURE_PAD * 2);
+    const height = Math.min(window.innerHeight - top,  r.height + CAPTURE_PAD * 2);
+    return { left, top, width, height };
+  }
+
+  function cleanupDisplayCapture(){
+    if (compositeRafId){ cancelAnimationFrame(compositeRafId); compositeRafId = 0; }
+    if (displayStream){
+      try { for (const t of displayStream.getTracks()) t.stop(); } catch {}
+      displayStream = null;
+    }
+    if (displayVideo){
+      try { displayVideo.srcObject = null; } catch {}
+      displayVideo = null;
+    }
+    compositeCanvas = null;
+    compositeCtx    = null;
+  }
+
+  async function ensureDisplayCapture(){
+    if (displayStream && displayStream.active && compositeCanvas) return true;
+    if (captureRequestPending) return false;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia){
+      toast('Tab capture not supported in this browser', 'err');
+      return false;
+    }
+    captureRequestPending = true;
+    try {
+      // `preferCurrentTab` is a Chromium-only hint that pre-selects the tab
+      // in the picker; harmless on browsers that ignore it.
+      displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 60 },
+        audio: false,
+        preferCurrentTab: true,
+        selfBrowserSurface: 'include',
+        surfaceSwitching:   'exclude',
+      });
+    } catch (err){
+      console.warn('[preview] tab capture denied/cancelled:', err);
+      toast('Tab capture permission denied', 'err');
+      captureRequestPending = false;
+      return false;
+    }
+    captureRequestPending = false;
+
+    displayVideo = document.createElement('video');
+    displayVideo.muted        = true;
+    displayVideo.playsInline  = true;
+    displayVideo.autoplay     = true;
+    displayVideo.srcObject    = displayStream;
+    // Wait for the first metadata so videoWidth/Height are valid, then for
+    // playback to start so drawImage() actually has pixels to read.
+    await new Promise((resolve) => {
+      const ready = () => {
+        if (displayVideo.readyState >= 2 /* HAVE_CURRENT_DATA */) resolve();
+      };
+      displayVideo.addEventListener('loadeddata', resolve, { once: true });
+      ready();
+    });
+    try { await displayVideo.play(); } catch {}
+
+    // If the user stops sharing from the browser controls, end any in-flight
+    // recording cleanly and free our state so the next click re-prompts.
+    const track = displayStream.getVideoTracks()[0];
+    if (track){
+      track.addEventListener('ended', () => {
+        if (window.SAVE_VIDEO && window.SAVE_VIDEO.isRecording()){
+          window.SAVE_VIDEO.stop();
+        }
+        cleanupDisplayCapture();
+      });
+    }
+
+    // Allocate the offscreen composite canvas at the captured pixel scale so
+    // we don't lose resolution on the way through.
+    const cssRect = readCaptureRectCSS();
+    if (!cssRect){ cleanupDisplayCapture(); return false; }
+    const sx = displayVideo.videoWidth  / window.innerWidth;
+    const sy = displayVideo.videoHeight / window.innerHeight;
+    const compW = Math.max(2, Math.round(cssRect.width  * sx));
+    const compH = Math.max(2, Math.round(cssRect.height * sy));
+    compositeCanvas = document.createElement('canvas');
+    compositeCanvas.width  = compW;
+    compositeCanvas.height = compH;
+    compositeCtx = compositeCanvas.getContext('2d');
+
+    // rAF copy loop. Recomputes the stage rect each frame so a window resize
+    // or stage layout shift doesn't drift out of the captured region.
+    const draw = () => {
+      if (!displayVideo || !compositeCtx){ compositeRafId = 0; return; }
+      const r = readCaptureRectCSS();
+      if (r){
+        const fx = displayVideo.videoWidth  / window.innerWidth;
+        const fy = displayVideo.videoHeight / window.innerHeight;
+        try {
+          compositeCtx.drawImage(
+            displayVideo,
+            r.left * fx, r.top * fy, r.width * fx, r.height * fy,
+            0, 0, compositeCanvas.width, compositeCanvas.height,
+          );
+        } catch {}
+      }
+      compositeRafId = requestAnimationFrame(draw);
+    };
+    compositeRafId = requestAnimationFrame(draw);
+    return true;
+  }
+
   const saveVideoBtn = $('#previewSaveVideoBtn');
   if (saveVideoBtn){
     const saveVideoLabel = saveVideoBtn.querySelector('.preview-save-video-label');
-    saveVideoBtn.addEventListener('click', () => {
+    saveVideoBtn.addEventListener('click', async () => {
       if (!window.SAVE_VIDEO){
-        if (typeof toast === 'function') toast('recording engine not ready', 'err');
+        toast('recording engine not ready', 'err');
         return;
       }
       if (window.SAVE_VIDEO.isRecording()){
         window.SAVE_VIDEO.stop();
         return;
       }
+      // getDisplayMedia must be invoked from a user gesture — that's the
+      // current click. The await suspends, but the gesture is already
+      // consumed by the time the prompt resolves, so subsequent calls
+      // (open the modal) don't need it.
+      const ok = await ensureDisplayCapture();
+      if (!ok) return;
       window.SAVE_VIDEO.setTarget({
-        getCanvas: () => faceCanvas,
+        getCanvas: () => compositeCanvas,
         button:    saveVideoBtn,
         labelEl:   saveVideoLabel,
         idleLabel: 'Save Video',
+        // Tear down the captured stream when the user cancels the modal or
+        // the recorder finishes — otherwise the tab keeps showing the
+        // "sharing" indicator and the rAF copy loop keeps running.
+        onCancel:  cleanupDisplayCapture,
+        onStop:    cleanupDisplayCapture,
       });
       window.SAVE_VIDEO.open();
     });
