@@ -2462,21 +2462,19 @@ vec3 ${dif} = ${ctx.inputs.albedo} * ${lit} * ${ctx.inputs.ao} * (1.0 - ${ctx.in
 // Specular highlight — Fresnel-modulated Blinn-Phong, scaled by smoothness.
 // Gated by presence so dim/black surfaces don't pick up gray spec.
 vec3 ${specC} = ${fres} * ${blinn} * ${ctx.inputs.smoothness} * ${spcS} * ${pres};
-// Environment reflection — split between dielectric and metallic paths so
-// metals can show the env IMAGE even when their albedo is dark, while
-// dielectrics keep proper Schlick fresnel behavior.
+// Environment reflection — split between dielectric and metallic paths.
 //   Dielectric: env * F0 * smoothness — tiny near face-on, fresnel rises
-//     at grazing. Gated by presence so pure-black backgrounds stay black.
-//   Metallic:   env * mix(white, albedo, metalTint) * smoothness ramp.
-//     metalTint controls how much albedo tints the reflection — 0 = pure
-//     env image visible, 1 = fully albedo-tinted (PBR; dark metal goes
-//     black-mirror). Smoothness is mapped to mix(0.3, 1.0) so even matte
-//     metal still shows ~30% env (real matte metals reflect blurrily
-//     rather than not at all).
+//     at grazing.
+//   Metallic:   env * mix(white, albedo, metalTint) * smoothness ramp,
+//     ALSO modulated by the lit factor (same NdotL+ambient curve as the
+//     diffuse term) so unlit metal regions don't read as emissive — the
+//     env reflection fades in shadow just like the diffuse highlight does.
+// Both paths are gated by presence so true-black backgrounds stay black.
 vec3 ${envC} = mix(
   ${ctx.inputs.environment} * ${fres} * ${ctx.inputs.smoothness},
   ${ctx.inputs.environment} * mix(vec3(1.0), ${ctx.inputs.albedo}, ${mTnt})
-                            * mix(0.3, 1.0, ${ctx.inputs.smoothness}),
+                            * mix(0.3, 1.0, ${ctx.inputs.smoothness})
+                            * ${lit},
   ${ctx.inputs.metallic}
 ) * ${envS} * ${pres};
 // Edge — masked by smoothness * presence so a soft (mostly gray) edge map

@@ -428,9 +428,7 @@ const PREVIEW = (() => {
       const simOn = document.body.classList.contains('sim-lighting-on');
       const aspect = faceCanvas.width / faceCanvas.height;
       const slx = simOn ? (shaderMX - 0.5) * aspect : 0.0;
-      // Y inverted — matches the editor's u_simLight convention so the
-      // lit highlight reads consistently across both modes.
-      const sly = simOn ? -(shaderMY - 0.5)         : 0.0;
+      const sly = simOn ? (shaderMY - 0.5)          : 0.0;
       const slz = simOn ? 0.45                       : 100.0;
 
       // ---- render every cache pass into its FBO before the main draw ----
@@ -492,9 +490,7 @@ const PREVIEW = (() => {
         if (simOn){
           const aspect = faceCanvas.width / faceCanvas.height;
           const lx = (shaderMX - 0.5) * aspect;
-          // Y inverted — see the per-pass slx/sly block above for the same
-          // convention so the main draw matches.
-          const ly = -(shaderMY - 0.5);
+          const ly = (shaderMY - 0.5);
           const lz = 0.45;
           if (uSimLight) gl.uniform3f(uSimLight, lx, ly, lz);
         } else {
