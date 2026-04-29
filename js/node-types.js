@@ -2397,6 +2397,12 @@ if (u_shadows > 0.5) {
       {name:'specStrength',  kind:'number', default:0.4,  min:0, max:3,    step:0.05},
       {name:'edgeStrength',  kind:'number', default:0.25, min:0, max:2,    step:0.05},
       {name:'ambient',       kind:'number', default:0.12, min:0, max:0.5,  step:0.01},
+      // metalTint controls how much the env reflection on METALS is tinted
+      // by the underlying albedo. 0 = pure env (image fully visible
+      // regardless of albedo color), 1 = fully albedo-tinted (correct PBR
+      // — dark albedo metal becomes dim mirror). 0.6 default keeps the env
+      // image visible while still respecting the metal's color.
+      {name:'metalTint',     kind:'number', default:0.6,  min:0, max:1,    step:0.05},
     ],
     generate:(ctx) => {
       const N      = ctx.tmp('pbrN');
@@ -2424,6 +2430,7 @@ if (u_shadows > 0.5) {
       const spcS = glslNum(ctx.params.specStrength ?? 0.4);
       const edgS = glslNum(ctx.params.edgeStrength ?? 0.25);
       const ambK = glslNum(ctx.params.ambient      ?? 0.12);
+      const mTnt = glslNum(ctx.params.metalTint    ?? 0.6);
       return {
         setup:
 `vec3 ${N} = normalize(${ctx.inputs.normal});
@@ -2442,11 +2449,11 @@ float ${blinn} = pow(${NdotH}, ${specP});
 // gray emissive smear.
 vec3 ${F0}   = mix(vec3(0.04), ${ctx.inputs.albedo}, ${ctx.inputs.metallic});
 vec3 ${fres} = ${F0} + (vec3(1.0) - ${F0}) * pow(1.0 - ${NdotV}, 5.0);
-// presence: 0 only when albedo is black AND metallic is 0. Gates the
-// dielectric env + spec + edge highlights so true-black non-metallic
-// background pixels stay black.
-float ${pres} = smoothstep(0.0, 0.05, max(max(${ctx.inputs.albedo}.r, ${ctx.inputs.albedo}.g),
-                                          max(${ctx.inputs.albedo}.b, ${ctx.inputs.metallic})));
+// presence: 0 only at near-pure-black + non-metallic. Tight smoothstep
+// (0..0.005) so legitimately dark texture pixels still get full lighting —
+// only the very near-zero "background void" is suppressed.
+float ${pres} = smoothstep(0.0, 0.005, max(max(${ctx.inputs.albedo}.r, ${ctx.inputs.albedo}.g),
+                                           max(${ctx.inputs.albedo}.b, ${ctx.inputs.metallic})));
 // Diffuse — only for non-metals (energy split). Lambert × shadow with an
 // ambient floor that fills in the unlit side WITHOUT exceeding albedo (so
 // the diffuse term can't push the result past 1.0 on its own).
@@ -2455,12 +2462,23 @@ vec3 ${dif} = ${ctx.inputs.albedo} * ${lit} * ${ctx.inputs.ao} * (1.0 - ${ctx.in
 // Specular highlight — Fresnel-modulated Blinn-Phong, scaled by smoothness.
 // Gated by presence so dim/black surfaces don't pick up gray spec.
 vec3 ${specC} = ${fres} * ${blinn} * ${ctx.inputs.smoothness} * ${spcS} * ${pres};
-// Environment reflection — pure PBR via Fresnel × smoothness × envStrength.
-// Because F0 = albedo for metals, env naturally inherits albedo's
-// darkness/tint: black metal = black mirror, white metal = full mirror.
-// The presence mask additionally suppresses dielectric edge reflections on
-// pure-black backgrounds.
-vec3 ${envC} = ${ctx.inputs.environment} * ${fres} * ${ctx.inputs.smoothness} * ${envS} * ${pres};
+// Environment reflection — split between dielectric and metallic paths so
+// metals can show the env IMAGE even when their albedo is dark, while
+// dielectrics keep proper Schlick fresnel behavior.
+//   Dielectric: env * F0 * smoothness — tiny near face-on, fresnel rises
+//     at grazing. Gated by presence so pure-black backgrounds stay black.
+//   Metallic:   env * mix(white, albedo, metalTint) * smoothness ramp.
+//     metalTint controls how much albedo tints the reflection — 0 = pure
+//     env image visible, 1 = fully albedo-tinted (PBR; dark metal goes
+//     black-mirror). Smoothness is mapped to mix(0.3, 1.0) so even matte
+//     metal still shows ~30% env (real matte metals reflect blurrily
+//     rather than not at all).
+vec3 ${envC} = mix(
+  ${ctx.inputs.environment} * ${fres} * ${ctx.inputs.smoothness},
+  ${ctx.inputs.environment} * mix(vec3(1.0), ${ctx.inputs.albedo}, ${mTnt})
+                            * mix(0.3, 1.0, ${ctx.inputs.smoothness}),
+  ${ctx.inputs.metallic}
+) * ${envS} * ${pres};
 // Edge — masked by smoothness * presence so a soft (mostly gray) edge map
 // only contributes where the surface actually is.
 vec3 ${edgeC} = vec3(${ctx.inputs.edge}) * ${edgS} * ${ctx.inputs.smoothness} * ${pres};

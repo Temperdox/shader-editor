@@ -392,7 +392,11 @@ const renderer = (() => {
         const simOn = document.body.classList.contains('sim-lighting-on');
         const aspect = canvas.width / canvas.height;
         const slx = simOn ? (mx - 0.5) * aspect : 0.0;
-        const sly = simOn ? (my - 0.5)          : 0.0;
+        // Y axis intentionally negated — shader-side convention is
+        // "cursor position = light position with Y inverted from GL space",
+        // which makes the lit highlight track the cursor as the user
+        // perceives it on screen rather than mirrored across the midline.
+        const sly = simOn ? -(my - 0.5)         : 0.0;
         const slz = simOn ? 0.45                : 100.0;
         const shadowsOn = document.body.classList.contains('shadows-on');
         const shadowsVal = shadowsOn ? 1.0 : 0.0;
@@ -474,8 +478,10 @@ const renderer = (() => {
           if (simOn){
             const aspect = canvas.width / canvas.height;
             const lx = (mx - 0.5) * aspect;
-            const ly = (my - 0.5);                  // mx,my already GL-space (Y flipped)
-            const lz = 0.45;                         // light height above surface
+            // Y intentionally negated (see also the pass-uniforms slx/sly
+            // block above for the same convention).
+            const ly = -(my - 0.5);
+            const lz = 0.45;
             if (uSimLight) gl.uniform3f(uSimLight, lx, ly, lz);
           } else {
             if (uSimLight) gl.uniform3f(uSimLight, 0.0, 0.0, 100.0);
